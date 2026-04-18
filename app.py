@@ -243,9 +243,9 @@ if df is None:
     st.stop()
 
 # ── Analysis ──
-idle = detect_idle(df)
-peak = detect_peak_jobs(df)
-over = detect_overprovision(df)
+idle = detect_idle(df, {})
+peak = detect_peak_jobs(df, {})
+over = detect_overprovision(df, {})
 total = idle['monthly_savings'].sum() + peak['monthly_savings'] + over['monthly_savings']
 
 # ── Metrics ──
