@@ -1,287 +1,310 @@
 import pandas as pd
 import numpy as np
-import os
-import json
-from dotenv import load_dotenv
+from scipy import stats
 
-load_dotenv()
-
-COLUMN_MAP = {
-    'timestamp':       ['timestamp', 'time', 'datetime', 'ts', 'date'],
-    'gpu_id':          ['gpu_id', 'gpu', 'device_id', 'device', 'server_id'],
-    'gpu_util':        ['gpu_util', 'gpu_util_pct', 'gpu_utilization', 'util', 'server_workload(%)'],
-    'memory_util':     ['memory_util', 'mem_util', 'gpu_memory_pct'],
-    'power_kw':        ['power_kw', 'power_watt', 'power', 'watt', 'watts'],
-    'temp_c':          ['temp_c', 'temperature', 'temp', 'inlet_temperature(°c)'],
-    'cooling_kw':      ['cooling_kw', 'cooling_power', 'cooling_unit_power_consumption(kw)'],
-    'electricity_rate':['electricity_rate', 'cost_per_hr', 'rate', 'total_energy_cost($)'],
-    'workload_type':   ['workload_type', 'job_type', 'workload', 'cooling_strategy_action'],
-    'gpu_model':       ['gpu_model', 'model', 'gpu_type'],
-}
-
-def ai_map_columns(columns: list) -> dict:
-    """AI 기반 컬럼 자동 매핑"""
-    try:
-        from anthropic import Anthropic
-        client = Anthropic()
-        prompt = f"""You are an expert in data center and GPU infrastructure data.
-I have a CSV file with these column names:
-{json.dumps(columns, indent=2)}
-
-Map each column to one of these standard fields (or null if not relevant):
-- timestamp, gpu_id, gpu_util, memory_util, power_kw, temp_c, cooling_kw, electricity_rate, workload_type
-
-Respond with ONLY a valid JSON object mapping standard_field -> original_column_name.
-Use null for unmatched fields."""
-
-        message = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=500,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        text = message.content[0].text.strip()
-        if '```' in text:
-            text = text.split('```')[1]
-            if text.startswith('json'):
-                text = text[4:]
-        mapping = json.loads(text)
-        return {k: v for k, v in mapping.items() if v is not None}
-    except Exception as e:
-        return {}
-
-def detect_columns(df):
-    """규칙 기반 컬럼 매핑 (fallback)"""
-    mapping = {}
-    df_cols_lower = {c.lower(): c for c in df.columns}
-    for standard, variants in COLUMN_MAP.items():
-        for v in variants:
-            if v.lower() in df_cols_lower:
-                mapping[standard] = df_cols_lower[v.lower()]
-                break
-    return mapping
-
-def load_data(filepath, chunksize=None):
-    if chunksize:
-        chunks = [chunk for chunk in pd.read_csv(filepath, chunksize=chunksize)]
-        df = pd.concat(chunks, ignore_index=True)
-    else:
-        df = pd.read_csv(filepath)
-
-    # 1. AI 매핑 시도
-    api_key = os.getenv('ANTHROPIC_API_KEY')
-    if api_key:
-        col_map = ai_map_columns(df.columns.tolist())
-    else:
-        col_map = {}
-
-    # 2. AI 매핑 안 된 컬럼은 규칙 기반으로 보완
-    rule_map = detect_columns(df)
-    for k, v in rule_map.items():
-        if k not in col_map:
-            col_map[k] = v
-
-    # 3. 표준 컬럼명으로 통일
-    rename = {v: k for k, v in col_map.items()}
-    df = df.rename(columns=rename)
-
-    if 'timestamp' in df.columns:
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df['hour']    = df['timestamp'].dt.hour
-        df['date']    = df['timestamp'].dt.date
-        df['weekday'] = df['timestamp'].dt.dayofweek
-
-    if 'power_kw' in df.columns and df['power_kw'].mean() > 100:
-        df['power_kw'] = df['power_kw'] / 1000
-
-    return df, col_map
-
-def detect_idle(df, col_map):
+def detect_idle_advanced(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    고정밀 Idle 탐지
+    1. 단순 임계값 X
+    2. Rolling average 기반
+    3. 같은 요일/시간대 baseline 비교
+    4. Z-score 이상 탐지
+    5. 신뢰도 점수
+    """
     results = []
     gpu_col = 'gpu_id' if 'gpu_id' in df.columns else None
     gpus = df[gpu_col].unique() if gpu_col else ['all']
 
     for gpu in gpus:
-        gdf = df[df[gpu_col] == gpu] if gpu_col else df
-        if 'gpu_util' not in gdf.columns:
+        gdf = df[df[gpu_col] == gpu].copy() if gpu_col else df.copy()
+        if 'gpu_util' not in gdf.columns or len(gdf) < 10:
             continue
 
-        threshold = min(gdf['gpu_util'].quantile(0.20), 25)
-        hourly_mean = gdf.groupby('hour')['gpu_util'].mean()
-        hourly_std  = gdf.groupby('hour')['gpu_util'].std().fillna(5)
+        # 1. 시간대별 baseline (같은 시간 평균)
+        hourly_baseline = gdf.groupby('hour')['gpu_util'].agg(['mean', 'std']).reset_index()
+        hourly_baseline.columns = ['hour', 'baseline_mean', 'baseline_std']
+        hourly_baseline['baseline_std'] = hourly_baseline['baseline_std'].fillna(5)
+        gdf = gdf.merge(hourly_baseline, on='hour', how='left')
 
-        idle_rows = []
-        for _, row in gdf.iterrows():
-            h = row['hour']
-            z = (row['gpu_util'] - hourly_mean.get(h, 50)) / max(hourly_std.get(h, 10), 1)
-            if z < -0.8 and row['gpu_util'] < 30:
-                idle_rows.append(row)
+        # 2. Z-score (현재 vs 시간대 baseline)
+        gdf['z_score'] = (gdf['gpu_util'] - gdf['baseline_mean']) / gdf['baseline_std'].clip(lower=1)
 
-        if not idle_rows:
+        # 3. Rolling 기반 idle 판단
+        rolling_col = 'util_rolling_3h' if 'util_rolling_3h' in gdf.columns else 'gpu_util'
+
+        # 4. 복합 조건으로 idle 탐지
+        idle_mask = (
+            (gdf[rolling_col] < 25) &          # rolling avg 낮음
+            (gdf['z_score'] < -0.5) &           # 평소보다 낮음
+            (gdf['gpu_util'] < 35)              # 현재 사용률 낮음
+        )
+        idle_rows = gdf[idle_mask]
+
+        if len(idle_rows) == 0:
             continue
 
-        idle_df = pd.DataFrame(idle_rows)
-        idle_hours = len(idle_df)
-        rate = idle_df['electricity_rate'].mean() if 'electricity_rate' in idle_df.columns else 3.20
-        power_savings = (idle_df['power_kw'].mean() * 0.65 * idle_hours * 0.12) if 'power_kw' in idle_df.columns else 0
-        instance_savings = idle_hours * rate * 0.70
-        total_savings = power_savings + instance_savings
-        confidence = min(95, 60 + (idle_hours / 10) + abs(len(idle_df) / len(gdf) * 30))
-        worst_hour = idle_df.groupby('hour').size().idxmax() if 'hour' in idle_df.columns else 0
+        # 5. 시간대별 그룹핑
+        idle_by_hour = idle_rows.groupby('hour').agg(
+            count=('gpu_util', 'count'),
+            avg_util=('gpu_util', 'mean'),
+            avg_power=('power_kw', 'mean') if 'power_kw' in idle_rows.columns else ('gpu_util', 'count'),
+        ).reset_index()
+
+        # 6. 절감액 계산
+        rate = idle_rows['electricity_rate'].mean() if 'electricity_rate' in idle_rows.columns else 3.20
+        power_avg = idle_rows['power_kw'].mean() if 'power_kw' in idle_rows.columns else 0.3
+        idle_hours_total = len(idle_rows)
+        savings = idle_hours_total * rate * 0.70  # 70% 절감
+
+        # 7. 신뢰도 점수
+        consistency = (idle_rows['z_score'] < -1.0).mean()
+        confidence = min(95, 50 + consistency * 40 + min(idle_hours_total / 5, 5))
+
+        worst_hour = idle_rows.groupby('hour').size().idxmax()
 
         results.append({
-            'gpu_id': gpu, 'idle_hours': idle_hours,
-            'avg_util_pct': round(idle_df['gpu_util'].mean(), 1),
-            'worst_hour': worst_hour,
-            'monthly_savings': round(total_savings, 2),
-            'confidence_pct': round(confidence, 0),
+            'gpu_id':          gpu,
+            'idle_hours':      idle_hours_total,
+            'avg_util_pct':    round(idle_rows['gpu_util'].mean(), 1),
+            'avg_power_kw':    round(power_avg, 3),
+            'worst_hour':      worst_hour,
+            'idle_by_hour':    idle_by_hour,
+            'monthly_savings': round(savings, 2),
+            'confidence_pct':  round(confidence, 1),
         })
 
     return pd.DataFrame(results).sort_values('monthly_savings', ascending=False) if results else pd.DataFrame()
 
-def detect_peak_jobs(df, col_map):
-    if 'electricity_rate' not in df.columns:
-        return {'peak_hours_count': 0, 'current_cost': 0, 'monthly_savings': 0, 'offpeak_rate': 0}
 
-    rate_p75 = df['electricity_rate'].quantile(0.75)
-    rate_p25 = df['electricity_rate'].quantile(0.25)
-    peak_mask = df['electricity_rate'] >= rate_p75
-    offpeak_mask = df['electricity_rate'] <= rate_p25
+def detect_peak_waste_advanced(df: pd.DataFrame, schedule: str = 'aws_us_east') -> dict:
+    """
+    피크 요금 낭비 탐지
+    - 피크 시간대 고부하 작업 탐지
+    - 오프피크로 이동 가능한 작업 식별
+    - 실제 절감 가능액 계산
+    """
+    from cost_model import TOU_SCHEDULES, get_hourly_rate
 
-    if 'workload_type' in df.columns:
-        training_mask = df['workload_type'].str.lower().str.contains('train|batch', na=False)
-        peak = df[peak_mask & training_mask]
-    elif 'gpu_util' in df.columns:
-        peak = df[peak_mask & (df['gpu_util'] > 70)]
+    tou = TOU_SCHEDULES.get(schedule, TOU_SCHEDULES['aws_us_east'])
+    peak_hours = set(tou['peak']['hours'])
+    offpeak_rate = tou['offpeak']['rate']
+
+    if 'electricity_rate' in df.columns:
+        rate_p75 = df['electricity_rate'].quantile(0.75)
+        peak_mask = df['electricity_rate'] >= rate_p75
     else:
-        peak = df[peak_mask]
+        peak_mask = df['hour'].isin(peak_hours)
 
-    offpeak_rate = df[offpeak_mask]['electricity_rate'].mean()
-    if len(peak) == 0:
-        return {'peak_hours_count': 0, 'current_cost': 0, 'monthly_savings': 0, 'offpeak_rate': round(offpeak_rate, 2)}
+    # 이동 가능한 작업: 피크 시간 + 높은 사용률
+    if 'workload_type' in df.columns:
+        movable = df[peak_mask & df['workload_type'].str.lower().str.contains(
+            'train|batch|job', na=False)]
+    else:
+        movable = df[peak_mask & (df['gpu_util'] > 65)]
 
-    current_cost = peak['electricity_rate'].sum()
-    savings = (peak['electricity_rate'] - offpeak_rate).sum()
+    if len(movable) == 0:
+        return {'peak_hours_count': 0, 'current_cost': 0,
+                'monthly_savings': 0, 'offpeak_rate': offpeak_rate}
+
+    # 현재 비용 vs 이동 후 비용
+    current_rate = movable['electricity_rate'].mean() if 'electricity_rate' in movable.columns else tou['peak']['rate']
+    current_cost = movable['electricity_rate'].sum() if 'electricity_rate' in movable.columns else len(movable) * current_rate
+    savings = (movable['electricity_rate'] - offpeak_rate).sum() if 'electricity_rate' in movable.columns else len(movable) * (current_rate - offpeak_rate)
+
+    # 일별 피크 패턴
+    peak_by_hour = movable.groupby('hour').size().reset_index(name='count')
+
+    days = df['date'].nunique() if 'date' in df.columns else 30
+    scale = 30 / max(days, 1)
+
     return {
-        'peak_hours_count': len(peak),
-        'current_cost': round(current_cost, 2),
-        'monthly_savings': round(max(savings, 0), 2),
-        'offpeak_rate': round(offpeak_rate, 4),
-        'peak_rate': round(df[peak_mask]['electricity_rate'].mean(), 4),
+        'peak_hours_count': len(movable),
+        'current_cost':     round(current_cost * scale, 2),
+        'monthly_savings':  round(max(savings, 0) * scale, 2),
+        'offpeak_rate':     round(offpeak_rate, 2),
+        'peak_rate':        round(current_rate, 2),
+        'peak_by_hour':     peak_by_hour,
     }
 
-def detect_overprovision(df, col_map):
+
+def detect_overprovision_advanced(df: pd.DataFrame) -> dict:
+    """
+    과잉 프로비저닝 탐지
+    - 시간대별 실제 필요 GPU 수 계산
+    - p95 수요 기반 (안전 마진 포함)
+    - 절감 가능 GPU 수 및 비용 계산
+    """
     if 'gpu_id' not in df.columns:
         return {'total_gpus': 0, 'monthly_savings': 0, 'top_waste_hours': pd.DataFrame()}
 
     total_gpus = df['gpu_id'].nunique()
     rate = df['electricity_rate'].mean() if 'electricity_rate' in df.columns else 3.20
 
-    hourly = df.groupby(['date', 'hour']).agg(
-        gpus_on=('gpu_id', 'nunique')
-    ).reset_index()
-    by_hour = hourly.groupby('hour').agg(
-        avg_on=('gpus_on', 'mean'),
-        p95_on=('gpus_on', lambda x: x.quantile(0.95))
+    # 시간대별 활성 GPU (사용률 > 15%)
+    active = df[df['gpu_util'] > 15].groupby(
+        ['date', 'hour']
+    )['gpu_id'].nunique().reset_index(name='active_gpus')
+
+    by_hour = active.groupby('hour').agg(
+        avg_active=('active_gpus', 'mean'),
+        p95_active=('active_gpus', lambda x: x.quantile(0.95)),
+        max_active=('active_gpus', 'max'),
     ).reset_index()
 
     rows = []
     for _, row in by_hour.iterrows():
-        needed = min(int(row['p95_on'] * 1.25) + 1, total_gpus)
+        # 필요 GPU = p95 수요 × 1.20 버퍼
+        needed = min(int(row['p95_active'] * 1.20) + 1, total_gpus)
         reducible = max(0, total_gpus - needed)
+
         if reducible >= 1:
+            saving = reducible * rate * 30
             rows.append({
-                'hour': int(row['hour']),
-                'avg_on': round(row['avg_on'], 1),
-                'p95_demand': round(row['p95_on'], 1),
-                'reducible': reducible,
-                'monthly_saving': round(reducible * rate * 30, 2),
+                'hour':            int(row['hour']),
+                'avg_active':      round(row['avg_active'], 1),
+                'p95_demand':      round(row['p95_active'], 1),
+                'max_demand':      int(row['max_active']),
+                'needed_w_buffer': needed,
+                'reducible':       reducible,
+                'monthly_saving':  round(saving, 2),
             })
 
     savings_df = pd.DataFrame(rows)
     total = savings_df['monthly_saving'].sum() if len(savings_df) > 0 else 0
     top = savings_df.nlargest(5, 'monthly_saving') if len(savings_df) > 0 else pd.DataFrame()
 
-    return {'total_gpus': total_gpus, 'monthly_savings': round(total, 2), 'top_waste_hours': top}
+    return {
+        'total_gpus':      total_gpus,
+        'monthly_savings': round(total, 2),
+        'top_waste_hours': top,
+        'savings_by_hour': savings_df,
+    }
 
-def detect_thermal(df, col_map):
-    if 'temp_c' not in df.columns:
-        return None
-    results = []
+
+def compute_efficiency_scores(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    GPU별 효율 점수 계산
+    - 사용률 대비 전력 효율
+    - 시간대별 효율 패턴
+    - 전체 점수 (0~100)
+    """
     gpu_col = 'gpu_id' if 'gpu_id' in df.columns else None
     gpus = df[gpu_col].unique() if gpu_col else ['all']
+    results = []
+
     for gpu in gpus:
         gdf = df[df[gpu_col] == gpu] if gpu_col else df
-        throttle = (gdf['temp_c'] > 85).mean() * 100
+
+        util_mean = gdf['gpu_util'].mean() if 'gpu_util' in gdf.columns else 0
+        util_std  = gdf['gpu_util'].std()  if 'gpu_util' in gdf.columns else 0
+
+        # 효율 점수 구성
+        util_score    = min(100, util_mean * 1.2)        # 사용률 점수
+        consist_score = max(0, 100 - util_std * 2)       # 일관성 점수
+        waste_hours   = (gdf['gpu_util'] < 15).mean() * 100 if 'gpu_util' in gdf.columns else 0
+        waste_score   = max(0, 100 - waste_hours * 2)    # 낭비 없음 점수
+
+        total_score = (util_score * 0.4 + consist_score * 0.3 + waste_score * 0.3)
+
+        grade = 'A' if total_score >= 80 else \
+                'B' if total_score >= 65 else \
+                'C' if total_score >= 50 else 'D'
+
         results.append({
-            'gpu_id': gpu,
-            'avg_temp_c': round(gdf['temp_c'].mean(), 1),
-            'max_temp_c': round(gdf['temp_c'].max(), 1),
-            'throttle_risk_pct': round(throttle, 1),
+            'gpu_id':       gpu,
+            'efficiency':   round(total_score, 1),
+            'grade':        grade,
+            'avg_util':     round(util_mean, 1),
+            'util_std':     round(util_std, 1),
+            'waste_pct':    round(waste_hours, 1),
         })
-    return pd.DataFrame(results)
 
-def run_analysis(filepath='gpu_metrics_30d.csv'):
-    print("=" * 62)
-    print("  InfraLens — AI Infrastructure Cost Analysis v3.0")
-    print("=" * 62)
+    return pd.DataFrame(results).sort_values('efficiency', ascending=False)
 
-    df, col_map = load_data(filepath, chunksize=100000)
-    tier = 'Pro' if len(col_map) >= 7 else ('Standard' if len(col_map) >= 4 else 'Basic')
 
-    print(f"\n  Data:  {len(df):,} rows | {df['gpu_id'].nunique() if 'gpu_id' in df.columns else '?'} devices | {df['date'].nunique() if 'date' in df.columns else '?'} days")
-    print(f"  Tier:  {tier} ({len(col_map)} columns mapped)")
-    print(f"  AI mapped: {list(col_map.keys())}\n")
+def run_full_analysis(filepath='gpu_metrics_30d.csv', schedule='aws_us_east', dc_type='average'):
+    from data_loader import load_and_prepare
+    from cost_model import simulate_before_after
 
-    idle    = detect_idle(df, col_map)
-    peak    = detect_peak_jobs(df, col_map)
-    over    = detect_overprovision(df, col_map)
-    thermal = detect_thermal(df, col_map)
+    df, col_map, quality = load_and_prepare(filepath)
+
+    print("=" * 65)
+    print("  InfraLens — Advanced Analysis Engine v4.0")
+    print("=" * 65)
+    print(f"\n  {quality['tier']} tier | {quality['clean_rows']:,} rows | "
+          f"{quality['devices']} devices | {quality['date_range']}\n")
+
+    idle    = detect_idle_advanced(df)
+    peak    = detect_peak_waste_advanced(df, schedule)
+    over    = detect_overprovision_advanced(df)
+    scores  = compute_efficiency_scores(df)
+    sim     = simulate_before_after(df, schedule=schedule, dc_type=dc_type)
 
     idle_total = idle['monthly_savings'].sum() if len(idle) > 0 else 0
-    total = idle_total + peak['monthly_savings'] + over['monthly_savings']
 
-    print("[ FINDING 01 ]  Idle Waste")
-    print("-" * 62)
+    # ── Efficiency Scores ──
+    print("[ EFFICIENCY SCORES ]")
+    print("-" * 65)
+    for _, row in scores.iterrows():
+        bar = '█' * int(row['efficiency'] / 10)
+        print(f"  {row['gpu_id']:10s}  Grade {row['grade']}  {bar:10s} {row['efficiency']:.0f}  "
+              f"avg {row['avg_util']}%  waste {row['waste_pct']}%")
+    print()
+
+    # ── Finding 01 ──
+    print("[ FINDING 01 ]  Idle Waste (Rolling Average + Z-score)")
+    print("-" * 65)
     if len(idle) > 0:
         for _, row in idle.iterrows():
-            print(f"  {row['gpu_id']}  |  {row['avg_util_pct']}% avg  |  {row['idle_hours']}h  |  worst {row['worst_hour']:02d}:00  |  ${row['monthly_savings']:,.0f}/mo  |  {row['confidence_pct']:.0f}% confidence")
+            print(f"  {row['gpu_id']:10s} | {row['avg_util_pct']}% avg util | "
+                  f"{row['idle_hours']}h idle | worst {row['worst_hour']:02d}:00 | "
+                  f"${row['monthly_savings']:,.0f}/mo | {row['confidence_pct']:.0f}% conf")
         print(f"\n  → Total: ${idle_total:,.2f}/month\n")
     else:
         print("  No significant idle waste.\n")
 
+    # ── Finding 02 ──
     print("[ FINDING 02 ]  Peak-Rate Scheduling")
-    print("-" * 62)
+    print("-" * 65)
     if peak['peak_hours_count'] > 0:
-        print(f"  Peak sessions:  {peak['peak_hours_count']}")
-        print(f"  Current cost:   ${peak['current_cost']:,.4f}/mo")
-        print(f"  Off-peak rate:  ${peak['offpeak_rate']}/hr")
-        print(f"  Savings:        ${peak['monthly_savings']:,.2f}/mo\n")
+        print(f"  Sessions in peak window: {peak['peak_hours_count']}")
+        print(f"  Peak rate:    ${peak['peak_rate']}/hr")
+        print(f"  Off-peak:     ${peak['offpeak_rate']}/hr")
+        print(f"  Current cost: ${peak['current_cost']:,.2f}/mo")
+        print(f"  Savings:      ${peak['monthly_savings']:,.2f}/mo\n")
     else:
-        print("  No peak waste detected.\n")
+        print("  No peak waste.\n")
 
-    print("[ FINDING 03 ]  Overprovisioning")
-    print("-" * 62)
-    if over['total_gpus'] > 0 and len(over['top_waste_hours']) > 0:
+    # ── Finding 03 ──
+    print("[ FINDING 03 ]  Overprovisioning (p95 demand)")
+    print("-" * 65)
+    if over['monthly_savings'] > 0 and len(over['top_waste_hours']) > 0:
         for _, row in over['top_waste_hours'].iterrows():
-            print(f"  {int(row['hour']):02d}:00  |  avg {row['avg_on']} on  |  reducible {row['reducible']}  |  ${row['monthly_saving']:,.0f}/mo")
+            print(f"  {int(row['hour']):02d}:00 | avg {row['avg_active']} on | "
+                  f"p95 {row['p95_demand']} | reducible {row['reducible']} | "
+                  f"${row['monthly_saving']:,.0f}/mo")
         print(f"\n  → Total: ${over['monthly_savings']:,.2f}/month\n")
     else:
         print("  No overprovisioning detected.\n")
 
-    if thermal is not None and len(thermal) > 0:
-        print("[ FINDING 04 ]  Thermal Analysis")
-        print("-" * 62)
-        for _, row in thermal.iterrows():
-            flag = ' ⚠ RISK' if row['throttle_risk_pct'] > 5 else ''
-            print(f"  {row['gpu_id']}  |  avg {row['avg_temp_c']}°C  |  max {row['max_temp_c']}°C{flag}")
-        print()
+    # ── Before/After ──
+    print("[ BEFORE / AFTER SIMULATION ]")
+    print("-" * 65)
+    print(f"  Schedule:  {sim['schedule_used']} | DC type: {sim['dc_type']}")
+    print(f"  Before:    ${sim['before_monthly']:>10,.2f} / month")
+    print(f"  After:     ${sim['after_monthly']:>10,.2f} / month")
+    print(f"  Savings:   ${sim['savings_monthly']:>10,.2f} / month  ({sim['savings_pct']}%)")
+    print(f"  Annual:    ${sim['savings_annual']:>10,.2f} / year")
 
-    print("=" * 62)
-    print(f"  TOTAL SAVINGS    ${total:>10,.2f} / month")
-    print(f"  ANNUAL           ${total*12:>10,.2f} / year")
-    print("=" * 62)
+    print("\n  Top saving hours:")
+    for _, row in sim['top_saving_hours'].iterrows():
+        print(f"    {int(row['hour']):02d}:00 → save ${row['daily_savings']:.2f}/day")
+
+    print("\n" + "=" * 65)
+    print(f"  TOTAL OPPORTUNITY   ${sim['savings_monthly']:>10,.2f} / month")
+    print(f"  ANNUAL OPPORTUNITY  ${sim['savings_annual']:>10,.2f} / year")
+    print(f"  SAVINGS RATE        {sim['savings_pct']}%")
+    print("=" * 65)
 
 if __name__ == '__main__':
-    import sys
-    filepath = sys.argv[1] if len(sys.argv) > 1 else 'gpu_metrics_30d.csv'
-    run_analysis(filepath)
+    run_full_analysis()
