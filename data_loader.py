@@ -89,17 +89,23 @@ def load_and_prepare(filepath, chunksize=None) -> tuple:
 
     original_len = len(df)
 
-    # 컬럼 매핑
-    api_key = os.getenv('ANTHROPIC_API_KEY')
-    col_map = ai_map_columns(df.columns.tolist()) if api_key else {}
-    rule_map = rule_map_columns(df)
-    for k, v in rule_map.items():
-        if k not in col_map:
-            col_map[k] = v
-
-    # 표준 컬럼명으로 rename
-    rename = {v: k for k, v in col_map.items()}
-    df = df.rename(columns=rename)
+    # nvidia-smi 형태 먼저 감지
+    if detect_nvidia_smi(df):
+        df = normalize_nvidia_smi(df)
+        col_map = {c: c for c in df.columns if c in [
+            'gpu_util','memory_util','power_kw','temp_c',
+            'gpu_id','gpu_model','timestamp','electricity_rate'
+        ]}
+    else:
+        # AI + 규칙 기반 컬럼 매핑
+        api_key = os.getenv('ANTHROPIC_API_KEY')
+        col_map = ai_map_columns(df.columns.tolist()) if api_key else {}
+        rule_map = rule_map_columns(df)
+        for k, v in rule_map.items():
+            if k not in col_map:
+                col_map[k] = v
+        rename = {v: k for k, v in col_map.items()}
+        df = df.rename(columns=rename)
 
     # timestamp 처리
     if 'timestamp' in df.columns:
@@ -164,3 +170,78 @@ if __name__ == '__main__':
     print(f"\nSample rolling stats:")
     if 'util_rolling_3h' in df.columns:
         print(df[['timestamp', 'gpu_util', 'util_rolling_3h', 'util_rolling_24h']].head(10).to_string())
+
+
+def detect_nvidia_smi(df) -> bool:
+    """nvidia-smi CSV 형태 감지"""
+    nvidia_cols = ['utilization.gpu [%]', 'power.draw [W]',
+                   'temperature.gpu', 'memory.used [MiB]']
+    return any(c in df.columns for c in nvidia_cols)
+
+
+def normalize_nvidia_smi(df) -> pd.DataFrame:
+    """nvidia-smi CSV를 표준 형태로 변환"""
+    rename_map = {}
+    
+    for col in df.columns:
+        col_lower = col.lower().strip()
+        if 'utilization.gpu' in col_lower:
+            rename_map[col] = 'gpu_util'
+        elif 'utilization.memory' in col_lower:
+            rename_map[col] = 'memory_util'
+        elif 'power.draw' in col_lower:
+            rename_map[col] = 'power_kw'
+        elif 'temperature.gpu' in col_lower:
+            rename_map[col] = 'temp_c'
+        elif 'memory.used' in col_lower:
+            rename_map[col] = 'memory_used_mb'
+        elif 'memory.total' in col_lower:
+            rename_map[col] = 'memory_total_mb'
+        elif 'timestamp' in col_lower:
+            rename_map[col] = 'timestamp'
+        elif col_lower == 'name' or 'gpu_name' in col_lower:
+            rename_map[col] = 'gpu_model'
+        elif 'index' in col_lower or col_lower == 'gpu':
+            rename_map[col] = 'gpu_id'
+
+    df = df.rename(columns=rename_map)
+
+    # % 기호 제거
+    for col in ['gpu_util', 'memory_util']:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.replace('%', '').str.strip()
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    # W → kW
+    if 'power_kw' in df.columns:
+        df['power_kw'] = df['power_kw'].astype(str).str.replace('W', '').str.strip()
+        df['power_kw'] = pd.to_numeric(df['power_kw'], errors='coerce').fillna(0)
+        if df['power_kw'].mean() > 10:
+            df['power_kw'] = df['power_kw'] / 1000
+
+    # MiB → 사용률 %
+    if 'memory_used_mb' in df.columns and 'memory_total_mb' in df.columns:
+        df['memory_used_mb'] = pd.to_numeric(
+            df['memory_used_mb'].astype(str).str.replace('MiB','').str.strip(),
+            errors='coerce').fillna(0)
+        df['memory_total_mb'] = pd.to_numeric(
+            df['memory_total_mb'].astype(str).str.replace('MiB','').str.strip(),
+            errors='coerce').fillna(1)
+        if 'memory_util' not in df.columns:
+            df['memory_util'] = (df['memory_used_mb'] / df['memory_total_mb'] * 100).round(1)
+
+    # gpu_id가 숫자면 이름으로 변환
+    if 'gpu_id' in df.columns:
+        df['gpu_id'] = df['gpu_id'].astype(str).str.strip()
+        df['gpu_id'] = df['gpu_id'].apply(
+            lambda x: f'gpu-{x}' if x.isdigit() else x)
+    
+    # 기본 전력 요금 추가 (없으면)
+    if 'electricity_rate' not in df.columns:
+        if 'hour' in df.columns:
+            df['electricity_rate'] = df['hour'].apply(
+                lambda h: 4.10 if 8 <= h < 22 else 2.10)
+        else:
+            df['electricity_rate'] = 3.20
+
+    return df
