@@ -82,6 +82,25 @@ def compute_efficiency_score(util: float, power_kw: float,
     efficiency = min(100, (util / max(power_kw * 100 / tdp_kw, 1)) * 100)
     return round(efficiency, 1)
 
+def detect_cost_type(df: pd.DataFrame) -> str:
+    """
+    cost_per_hr 컬럼이 인스턴스 요금인지 전력 요금인지 감지
+    - 인스턴스 요금: ~/hr 범위 (AWS GPU 인스턴스)
+    - 전력 요금: /bin/zsh.07~/bin/zsh.18/kWh 범위
+    """
+    if 'electricity_rate' in df.columns:
+        col = df['electricity_rate']
+    elif 'cost_per_hr' in df.columns:
+        col = df['cost_per_hr']
+    else:
+        return 'instance'
+
+    mean_rate = col.mean()
+    if mean_rate > 0.5:
+        return 'instance'  # 인스턴스 요금 ($/hr)
+    else:
+        return 'electricity'  # 전력 요금 ($/kWh)
+
 def simulate_before_after(df: pd.DataFrame, 
                            idle_threshold: float = 20.0,
                            schedule: str = 'aws_us_east',
@@ -99,24 +118,46 @@ def simulate_before_after(df: pd.DataFrame,
     if 'is_weekend' not in df.columns:
         df['is_weekend'] = pd.to_datetime(df['timestamp']).dt.dayofweek >= 5
 
-    df['tou_rate'] = df.apply(
-        lambda r: get_hourly_rate(r['hour'], r['is_weekend'], schedule), axis=1
-    )
+    cost_type = detect_cost_type(df)
 
-    # 전력이 없으면 추정
-    if 'power_kw' not in df.columns:
-        gpu_model = df.get('gpu_model', pd.Series(['default'])).iloc[0] if 'gpu_model' in df.columns else 'default'
-        tdp_kw = GPU_TDP.get(str(gpu_model).lower(), GPU_TDP['default']) / 1000
-        df['power_kw'] = df['gpu_util'] / 100 * tdp_kw + estimate_idle_power(gpu_model)
+    if cost_type == 'instance':
+        # 인스턴스 요금 방식: cost_per_hr이 이미 전체 비용
+        rate_col = 'electricity_rate' if 'electricity_rate' in df.columns else 'cost_per_hr'
+        df['before_cost'] = df[rate_col]
+        df['tou_rate'] = df[rate_col]
 
-    # 냉각 오버헤드 포함
-    df['cooling_kw'] = df['power_kw'].apply(
-        lambda p: calculate_cooling_overhead(p, dc_type)
-    )
-    df['total_power_kw'] = df['power_kw'] + df['cooling_kw']
+        # 냉각 오버헤드 추가
+        overhead = COOLING_OVERHEAD.get(dc_type, 0.50)
+        df['before_cost'] = df['before_cost'] * (1 + overhead * 0.3)
 
-    # BEFORE: 현재 비용
-    df['before_cost'] = df['total_power_kw'] * df['tou_rate']
+        # power_kw 없으면 추정
+        if 'power_kw' not in df.columns and 'power_watt' in df.columns:
+            df['power_kw'] = df['power_watt'] / 1000
+        elif 'power_kw' not in df.columns:
+            if 'gpu_model' in df.columns:
+                gpu_model = df['gpu_model'].iloc[0]
+            else:
+                gpu_model = 'default'
+            tdp_kw = GPU_TDP.get(str(gpu_model).lower(), GPU_TDP['default']) / 1000
+            df['power_kw'] = df.get('gpu_util', pd.Series([50]*len(df))) / 100 * tdp_kw
+
+    else:
+        # 전력 요금 방식: power x rate 계산
+        df['tou_rate'] = df.apply(
+            lambda r: get_hourly_rate(r['hour'], r['is_weekend'], schedule), axis=1
+        )
+
+        if 'power_kw' not in df.columns:
+            if 'power_watt' in df.columns:
+                df['power_kw'] = df['power_watt'] / 1000
+            else:
+                gpu_model = df['gpu_model'].iloc[0] if 'gpu_model' in df.columns else 'default'
+                tdp_kw = GPU_TDP.get(str(gpu_model).lower(), GPU_TDP['default']) / 1000
+                df['power_kw'] = df.get('gpu_util', pd.Series([50]*len(df))) / 100 * tdp_kw
+
+        df['cooling_kw']     = df['power_kw'].apply(lambda p: calculate_cooling_overhead(p, dc_type))
+        df['total_power_kw'] = df['power_kw'] + df['cooling_kw']
+        df['before_cost']    = df['total_power_kw'] * df['tou_rate']
 
     # AFTER: 최적화 적용
     # 1. Idle GPU → 절전 (70% 절감)
@@ -134,11 +175,17 @@ def simulate_before_after(df: pd.DataFrame,
     df.loc[high_util_peak, 'after_rate'] = offpeak_rate
 
     # 3. 냉각 재계산
-    df['after_cooling_kw'] = df['after_power_kw'].apply(
-        lambda p: calculate_cooling_overhead(p, dc_type)
-    )
-    df['after_total_kw'] = df['after_power_kw'] + df['after_cooling_kw']
-    df['after_cost'] = df['after_total_kw'] * df['after_rate']
+    if cost_type == 'instance':
+        # 인스턴스 방식: idle이면 70% 절감, peak shift면 offpeak rate 적용
+        df['after_cost'] = df['before_cost'].copy()
+        df.loc[idle_mask, 'after_cost'] = df.loc[idle_mask, 'before_cost'] * 0.30
+        df.loc[high_util_peak, 'after_cost'] = df.loc[high_util_peak, 'before_cost'] * (offpeak_rate / df.loc[high_util_peak, 'tou_rate'].clip(lower=0.01))
+    else:
+        df['after_cooling_kw'] = df['after_power_kw'].apply(
+            lambda p: calculate_cooling_overhead(p, dc_type)
+        )
+        df['after_total_kw'] = df['after_power_kw'] + df['after_cooling_kw']
+        df['after_cost'] = df['after_total_kw'] * df['after_rate']
 
     # 결과 집계
     days = df['date'].nunique() if 'date' in df.columns else 30

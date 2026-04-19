@@ -376,7 +376,8 @@ def detect_idle_ml(df: pd.DataFrame) -> pd.DataFrame:
 
         idle_hours = len(idle_anomalies)
         rate = idle_anomalies['electricity_rate'].mean() if 'electricity_rate' in idle_anomalies.columns else 3.20
-        savings = idle_hours * rate * 0.70
+        days = gdf['date'].nunique() if 'date' in gdf.columns else 30
+        savings  = (idle_hours / max(days, 1)) * 30 * min(rate, 5.0) * 0.70
         confidence = min(95, 65 + (idle_hours / len(gdf)) * 100)
         worst_hour = idle_anomalies.groupby('hour').size().idxmax() if 'hour' in idle_anomalies.columns else 0
 
@@ -582,7 +583,8 @@ def detect_idle_ml_v2(df: pd.DataFrame) -> pd.DataFrame:
         confidence = min(95, 60 + both_ratio * 35 + (len(idle_rows) / len(gdf)) * 20)
 
         rate = idle_rows['electricity_rate'].mean() if 'electricity_rate' in idle_rows.columns else 3.20
-        savings = len(idle_rows) * rate * 0.70
+        days = gdf['date'].nunique() if 'date' in gdf.columns else 30
+        savings  = (len(idle_rows) / max(days, 1)) * 30 * min(rate, 5.0) * 0.70
         worst_hour = idle_rows.groupby('hour').size().idxmax() if 'hour' in idle_rows.columns else 0
 
         results.append({
@@ -739,7 +741,8 @@ def detect_idle_prophet(df: pd.DataFrame) -> pd.DataFrame:
                 continue
 
             rate     = idle_rows['electricity_rate'].mean() if 'electricity_rate' in idle_rows.columns else 3.20
-            savings  = len(idle_rows) * rate * 0.70
+            days = gdf['date'].nunique() if 'date' in gdf.columns else 30
+            savings  = (len(idle_rows) / max(days, 1)) * 30 * min(rate, 5.0) * 0.70
             confidence = min(95, 70 + (len(idle_rows) / len(gdf)) * 50)
             worst_hour = idle_rows.groupby('hour').size().idxmax() if 'hour' in idle_rows.columns else 0
 
@@ -1100,9 +1103,20 @@ def compute_energy_efficiency(df: pd.DataFrame) -> pd.DataFrame:
         if len(inefficient) == 0:
             continue
 
-        rate    = inefficient['electricity_rate'].mean() if 'electricity_rate' in inefficient.columns else 3.20
-        wasted_power = inefficient['power_kw'].mean() * (1 - inefficient['cop_efficiency'].mean())
-        savings = wasted_power * len(inefficient) * rate * 0.5
+        rate    = min(inefficient['electricity_rate'].mean() if 'electricity_rate' in inefficient.columns else 3.20, 5.0)
+        days    = gdf['date'].nunique() if 'date' in gdf.columns else 30
+        # 전력 절감 기반 계산 (kW x 시간 x 요금)
+        # power_kw가 instance 요금이면 전력 절감 비율만 적용
+        avg_cop_inefficiency = 1 - inefficient['cop_efficiency'].mean()
+        monthly_hours = (len(inefficient) / max(days, 1)) * 30
+        if rate > 1.0:
+            # instance 요금: 비효율 비율 x 요금 x 시간
+            savings = avg_cop_inefficiency * rate * monthly_hours * 0.3
+        else:
+            # 전력 요금: 낭비 전력 x 요금
+            wasted_power = inefficient['power_kw'].mean() * avg_cop_inefficiency
+            savings = wasted_power * monthly_hours * rate * 0.5
+        savings = min(savings, rate * 24 * 30 * 0.5)  # GPU 1대 한달치 캡
         worst_hour = inefficient.groupby('hour').size().idxmax() if 'hour' in inefficient.columns else 0
 
         results.append({
