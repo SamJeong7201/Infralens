@@ -653,7 +653,7 @@ def detect_idle_final(df: pd.DataFrame) -> pd.DataFrame:
             'gpu_id':           row['gpu_id'],
             'idle_hours':       int(float(str(row.get('idle_hours_rule') or row.get('idle_hours_ml') or 0).replace('nan','0'))),
             'avg_util_pct':     row.get('avg_util_pct', 0),
-            'worst_hour':       int(row.get('worst_hour', 0)),
+            'worst_hour':       int(float(str(row.get('worst_hour', 0)).replace('nan','0'))),
             'monthly_savings':  round(savings, 2),
             'confidence_pct':   round(confidence, 1),
             'detection_method': method,
