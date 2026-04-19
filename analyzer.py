@@ -308,3 +308,9 @@ def run_full_analysis(filepath='gpu_metrics_30d.csv', schedule='aws_us_east', dc
 
 if __name__ == '__main__':
     run_full_analysis()
+
+
+def run_billing_analysis(df, col_map):
+    """빌링 데이터 전용 분석 — data_profiler 연동"""
+    from data_profiler import analyze_billing
+    return analyze_billing(df, col_map)
