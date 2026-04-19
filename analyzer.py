@@ -657,3 +657,159 @@ def detect_idle_final(df: pd.DataFrame) -> pd.DataFrame:
         })
 
     return pd.DataFrame(final).sort_values('monthly_savings', ascending=False)
+
+
+def detect_idle_prophet(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Prophet 시계열 분해 기반 이상 탐지
+    1. 각 GPU별 시계열을 Prophet으로 분해
+    2. trend + seasonality 제거 → 순수 잔차(residual) 추출
+    3. 잔차에서 이상치 탐지 → 계절성 패턴 제거로 정확도 향상
+    """
+    try:
+        from prophet import Prophet
+    except ImportError:
+        return pd.DataFrame()
+
+    import logging
+    logging.getLogger('prophet').setLevel(logging.ERROR)
+    logging.getLogger('cmdstanpy').setLevel(logging.ERROR)
+
+    results = []
+    gpu_col = 'gpu_id' if 'gpu_id' in df.columns else None
+    gpus = df[gpu_col].unique() if gpu_col else ['all']
+
+    for gpu in gpus:
+        gdf = df[df[gpu_col] == gpu].copy() if gpu_col else df.copy()
+
+        if 'gpu_util' not in gdf.columns or 'timestamp' not in gdf.columns:
+            continue
+        if len(gdf) < 48:
+            continue
+
+        try:
+            # Prophet 형식으로 변환
+            prophet_df = pd.DataFrame({
+                'ds': pd.to_datetime(gdf['timestamp']),
+                'y':  gdf['gpu_util'].values
+            }).dropna()
+
+            # Prophet 학습
+            m = Prophet(
+                daily_seasonality=True,
+                weekly_seasonality=True,
+                yearly_seasonality=False,
+                changepoint_prior_scale=0.05,
+                seasonality_prior_scale=10,
+                interval_width=0.95
+            )
+            m.fit(prophet_df)
+
+            # 예측
+            forecast = m.predict(prophet_df)
+
+            # 잔차 계산 (실제 - 예측)
+            gdf = gdf.copy()
+            gdf['predicted']  = forecast['yhat'].values
+            gdf['residual']   = gdf['gpu_util'] - gdf['predicted']
+            gdf['upper_band'] = forecast['yhat_upper'].values
+            gdf['lower_band'] = forecast['yhat_lower'].values
+
+            # 이상치: 예측 범위 밖 + 낮은 사용률
+            gdf['is_anomaly'] = (
+                (gdf['gpu_util'] < gdf['lower_band']) &
+                (gdf['gpu_util'] < 30)
+            )
+
+            # 잔차 Z-score
+            residual_mean = gdf['residual'].mean()
+            residual_std  = gdf['residual'].std()
+            gdf['residual_z'] = (gdf['residual'] - residual_mean) / max(residual_std, 1)
+
+            # 강한 이상치: 잔차 Z-score < -1.5 AND 예측 범위 밖
+            strong_anomaly = gdf['is_anomaly'] & (gdf['residual_z'] < -1.5)
+            idle_rows = gdf[strong_anomaly]
+
+            if len(idle_rows) == 0:
+                # 약한 이상치도 포함
+                idle_rows = gdf[gdf['is_anomaly']]
+
+            if len(idle_rows) == 0:
+                continue
+
+            rate     = idle_rows['electricity_rate'].mean() if 'electricity_rate' in idle_rows.columns else 3.20
+            savings  = len(idle_rows) * rate * 0.70
+            confidence = min(95, 70 + (len(idle_rows) / len(gdf)) * 50)
+            worst_hour = idle_rows.groupby('hour').size().idxmax() if 'hour' in idle_rows.columns else 0
+
+            results.append({
+                'gpu_id':          gpu,
+                'idle_hours':      len(idle_rows),
+                'avg_util_pct':    round(idle_rows['gpu_util'].mean(), 1),
+                'worst_hour':      worst_hour,
+                'monthly_savings': round(savings, 2),
+                'confidence_pct':  round(confidence, 1),
+                'detection_method': 'Prophet seasonality decomposition',
+            })
+
+        except Exception as e:
+            continue
+
+    return pd.DataFrame(results).sort_values('monthly_savings', ascending=False) if results else pd.DataFrame()
+
+
+def detect_idle_ultimate(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    최종 최고 정밀도:
+    Rule-based + Z-score + IsolationForest + DBSCAN + Prophet
+    5중 결합 — 신뢰도 최대화
+    """
+    import warnings
+    warnings.filterwarnings('ignore')
+
+    final_df   = detect_idle_final(df)    # Rule + IF + DBSCAN
+    prophet_df = detect_idle_prophet(df)  # Prophet
+
+    if len(final_df) == 0 and len(prophet_df) == 0:
+        return pd.DataFrame()
+    if len(prophet_df) == 0:
+        return final_df
+    if len(final_df) == 0:
+        return prophet_df
+
+    merged = final_df.merge(
+        prophet_df[['gpu_id', 'monthly_savings', 'confidence_pct']],
+        on='gpu_id', how='outer', suffixes=('_final', '_prophet')
+    )
+
+    results = []
+    for _, row in merged.iterrows():
+        s_final   = row.get('monthly_savings_final', 0)   or 0
+        s_prophet = row.get('monthly_savings_prophet', 0) or 0
+        c_final   = row.get('confidence_pct_final', 0)    or 0
+        c_prophet = row.get('confidence_pct_prophet', 0)  or 0
+
+        if s_final > 0 and s_prophet > 0:
+            # 모든 방법이 동의 → 최고 신뢰도
+            savings    = (s_final * c_final + s_prophet * c_prophet) / (c_final + c_prophet + 0.001)
+            confidence = min(95, (c_final + c_prophet) / 2 + 10)
+            method     = 'Rule + IF + DBSCAN + Prophet (5-method)'
+        elif s_final > 0:
+            savings, confidence = s_final, c_final
+            method = row.get('detection_method', 'Rule + IF + DBSCAN')
+        else:
+            savings    = s_prophet
+            confidence = c_prophet * 0.85
+            method     = 'Prophet only'
+
+        results.append({
+            'gpu_id':           row['gpu_id'],
+            'idle_hours':       int(row.get('idle_hours', 0) or 0),
+            'avg_util_pct':     row.get('avg_util_pct', 0) or 0,
+            'worst_hour':       int(row.get('worst_hour', 0) or 0),
+            'monthly_savings':  round(savings, 2),
+            'confidence_pct':   round(confidence, 1),
+            'detection_method': method,
+        })
+
+    return pd.DataFrame(results).sort_values('monthly_savings', ascending=False)

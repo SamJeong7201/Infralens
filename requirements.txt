@@ -6,3 +6,4 @@ scipy
 anthropic
 python-dotenv
 scikit-learn
+prophet
