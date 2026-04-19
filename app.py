@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from data_loader import load_and_prepare
 from data_profiler import profile_dataset, analyze_billing
 from cost_model import simulate_before_after
-from analyzer import (detect_idle_advanced, detect_peak_waste_advanced,
+from analyzer import (detect_idle_combined, detect_peak_waste_advanced,
                       detect_overprovision_advanced, compute_efficiency_scores)
 from recommender import generate_recommendations, format_report
 
@@ -190,7 +190,7 @@ if data_type == 'billing':
 else:
     # ── TIMESERIES 분석 ──
     with st.spinner("Running advanced analysis..."):
-        idle   = detect_idle_advanced(df)
+        idle   = detect_idle_combined(df)
         peak   = detect_peak_waste_advanced(df, schedule)
         over   = detect_overprovision_advanced(df)
         scores = compute_efficiency_scores(df)

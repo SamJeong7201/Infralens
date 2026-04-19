@@ -314,3 +314,142 @@ def run_billing_analysis(df, col_map):
     """빌링 데이터 전용 분석 — data_profiler 연동"""
     from data_profiler import analyze_billing
     return analyze_billing(df, col_map)
+
+
+def detect_idle_ml(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    2단계: Isolation Forest 기반 이상 탐지
+    - 단순 임계값이나 Z-score로 못 잡는 복합 패턴 탐지
+    - 다변수 (gpu_util + power_kw + hour + memory_util) 동시 분석
+    - 각 포인트의 이상 점수 계산
+    """
+    from sklearn.ensemble import IsolationForest
+    from sklearn.preprocessing import StandardScaler
+
+    results = []
+    gpu_col = 'gpu_id' if 'gpu_id' in df.columns else None
+    gpus = df[gpu_col].unique() if gpu_col else ['all']
+
+    # 사용할 피처 선택
+    feature_cols = []
+    for col in ['gpu_util', 'power_kw', 'memory_util', 'hour', 'util_rolling_3h']:
+        if col in df.columns:
+            feature_cols.append(col)
+
+    if len(feature_cols) < 2:
+        return pd.DataFrame()
+
+    for gpu in gpus:
+        gdf = df[df[gpu_col] == gpu].copy() if gpu_col else df.copy()
+
+        if len(gdf) < 20:
+            continue
+
+        # 피처 행렬 준비
+        X = gdf[feature_cols].fillna(gdf[feature_cols].median())
+
+        # 정규화
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+
+        # Isolation Forest
+        clf = IsolationForest(
+            contamination=0.15,  # 15%가 이상치라고 가정
+            random_state=42,
+            n_estimators=100
+        )
+        gdf = gdf.copy()
+        gdf['anomaly_score'] = clf.fit_predict(X_scaled)
+        gdf['anomaly_raw']   = clf.score_samples(X_scaled)
+
+        # 이상 포인트 = -1
+        anomalies = gdf[gdf['anomaly_score'] == -1]
+
+        # idle 이상치만 (낮은 사용률)
+        if 'gpu_util' in anomalies.columns:
+            idle_anomalies = anomalies[anomalies['gpu_util'] < 35]
+        else:
+            idle_anomalies = anomalies
+
+        if len(idle_anomalies) == 0:
+            continue
+
+        idle_hours = len(idle_anomalies)
+        rate = idle_anomalies['electricity_rate'].mean() if 'electricity_rate' in idle_anomalies.columns else 3.20
+        savings = idle_hours * rate * 0.70
+        confidence = min(95, 65 + (idle_hours / len(gdf)) * 100)
+        worst_hour = idle_anomalies.groupby('hour').size().idxmax() if 'hour' in idle_anomalies.columns else 0
+
+        results.append({
+            'gpu_id':           gpu,
+            'idle_hours':       idle_hours,
+            'avg_util_pct':     round(idle_anomalies['gpu_util'].mean(), 1) if 'gpu_util' in idle_anomalies.columns else 0,
+            'worst_hour':       worst_hour,
+            'monthly_savings':  round(savings, 2),
+            'confidence_pct':   round(confidence, 1),
+            'method':           'Isolation Forest (ML)',
+        })
+
+    return pd.DataFrame(results).sort_values('monthly_savings', ascending=False) if results else pd.DataFrame()
+
+
+def detect_idle_combined(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    1단계 (Z-score) + 2단계 (Isolation Forest) 결합
+    - 두 방법 모두 잡은 것: 높은 신뢰도
+    - 한 방법만 잡은 것: 중간 신뢰도
+    - 결과 병합 및 신뢰도 조정
+    """
+    rule_results = detect_idle_advanced(df)
+    ml_results   = detect_idle_ml(df)
+
+    if len(rule_results) == 0 and len(ml_results) == 0:
+        return pd.DataFrame()
+
+    if len(rule_results) == 0:
+        ml_results['detection_method'] = 'ML only'
+        return ml_results
+
+    if len(ml_results) == 0:
+        rule_results['detection_method'] = 'Rule + Z-score'
+        return rule_results
+
+    # 두 결과 병합
+    merged = rule_results.merge(
+        ml_results[['gpu_id', 'idle_hours', 'monthly_savings', 'confidence_pct']],
+        on='gpu_id', how='outer', suffixes=('_rule', '_ml')
+    )
+
+    final = []
+    for _, row in merged.iterrows():
+        rule_savings = row.get('monthly_savings_rule', 0) or 0
+        ml_savings   = row.get('monthly_savings_ml', 0)   or 0
+        rule_conf    = row.get('confidence_pct_rule', 0)  or 0
+        ml_conf      = row.get('confidence_pct_ml', 0)    or 0
+
+        if rule_savings > 0 and ml_savings > 0:
+            # 둘 다 잡음 → 높은 신뢰도
+            savings    = (rule_savings + ml_savings) / 2
+            confidence = min(95, (rule_conf + ml_conf) / 2 + 10)
+            method     = 'Rule + ML (high confidence)'
+        elif rule_savings > 0:
+            savings    = rule_savings
+            confidence = rule_conf
+            method     = 'Rule-based'
+        else:
+            savings    = ml_savings
+            confidence = ml_conf * 0.85
+            method     = 'ML only'
+
+        final.append({
+            'gpu_id':           row['gpu_id'],
+            'idle_hours':       row.get('idle_hours_rule') or row.get('idle_hours_ml', 0),
+            'avg_util_pct':     row.get('avg_util_pct', 0),
+            'worst_hour':       row.get('worst_hour', 0),
+            'monthly_savings':  round(savings, 2),
+            'confidence_pct':   round(confidence, 1),
+            'detection_method': method,
+        })
+
+    result_df = pd.DataFrame(final)
+    return result_df.sort_values('monthly_savings', ascending=False)
