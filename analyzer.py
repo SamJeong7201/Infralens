@@ -453,3 +453,207 @@ def detect_idle_combined(df: pd.DataFrame) -> pd.DataFrame:
 
     result_df = pd.DataFrame(final)
     return result_df.sort_values('monthly_savings', ascending=False)
+
+
+def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    피처 엔지니어링 강화
+    - 요일별 패턴
+    - 전력 대비 사용률 비율
+    - 시간 변화율
+    - 비즈니스 시간 여부
+    """
+    df = df.copy()
+
+    if 'gpu_util' in df.columns:
+        # 전 시간 대비 변화율
+        df['util_change'] = df.groupby('gpu_id')['gpu_util'].diff().fillna(0) if 'gpu_id' in df.columns else df['gpu_util'].diff().fillna(0)
+
+        # 전력 대비 사용률 효율
+        if 'power_kw' in df.columns:
+            df['util_per_kw'] = df['gpu_util'] / (df['power_kw'] + 0.001)
+
+        # 24시간 대비 현재 사용률 비율
+        if 'util_rolling_24h' in df.columns:
+            df['util_vs_24h'] = df['gpu_util'] / (df['util_rolling_24h'] + 0.001)
+
+    # 요일 패턴
+    if 'weekday' in df.columns:
+        df['is_monday']  = (df['weekday'] == 0).astype(int)
+        df['is_friday']  = (df['weekday'] == 4).astype(int)
+        df['is_weekend'] = (df['weekday'] >= 5).astype(int)
+
+    # 비즈니스 시간
+    if 'hour' in df.columns:
+        df['is_business'] = df['hour'].between(9, 18).astype(int)
+        df['is_deep_night'] = df['hour'].between(0, 5).astype(int)
+
+        # sin/cos 인코딩 (시간의 주기성)
+        df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
+        df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
+
+    return df
+
+
+def detect_idle_ml_v2(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    ML v2 — GPU별 개별 모델 + 강화된 피처 + DBSCAN 결합
+    """
+    from sklearn.ensemble import IsolationForest
+    from sklearn.cluster import DBSCAN
+    from sklearn.preprocessing import StandardScaler
+
+    # 피처 엔지니어링 적용
+    df = engineer_features(df)
+
+    results = []
+    gpu_col = 'gpu_id' if 'gpu_id' in df.columns else None
+    gpus = df[gpu_col].unique() if gpu_col else ['all']
+
+    # 사용할 피처
+    base_features = ['gpu_util', 'power_kw', 'memory_util',
+                     'hour_sin', 'hour_cos', 'util_rolling_3h',
+                     'util_rolling_24h', 'util_change', 'util_per_kw',
+                     'util_vs_24h', 'is_business', 'is_deep_night',
+                     'is_weekend']
+    feature_cols = [f for f in base_features if f in df.columns]
+
+    for gpu in gpus:
+        gdf = df[df[gpu_col] == gpu].copy() if gpu_col else df.copy()
+
+        if len(gdf) < 24:
+            continue
+
+        X = gdf[feature_cols].fillna(gdf[feature_cols].median())
+
+        # 정규화
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+
+        # ── Isolation Forest (GPU별 개별 학습) ──
+        # contamination 자동 조정: idle 시간 비율 기반
+        if 'gpu_util' in gdf.columns:
+            estimated_idle = (gdf['gpu_util'] < 25).mean()
+            contamination = max(0.05, min(0.30, estimated_idle))
+        else:
+            contamination = 0.15
+
+        iso = IsolationForest(
+            contamination=contamination,
+            random_state=42,
+            n_estimators=200,
+            max_samples='auto'
+        )
+        iso_labels = iso.fit_predict(X_scaled)
+        iso_scores = iso.score_samples(X_scaled)
+
+        gdf = gdf.copy()
+        gdf['iso_label'] = iso_labels
+        gdf['iso_score'] = iso_scores
+
+        # ── DBSCAN ──
+        dbscan = DBSCAN(eps=1.2, min_samples=3)
+        db_labels = dbscan.fit_predict(X_scaled)
+        gdf['db_label'] = db_labels  # -1 = 이상치
+
+        # ── 결합 전략 ──
+        # 둘 다 이상치로 판단 → 확실한 이상치
+        gdf['both_anomaly'] = ((gdf['iso_label'] == -1) & (gdf['db_label'] == -1))
+        # 하나만 이상치 → 후보
+        gdf['one_anomaly']  = ((gdf['iso_label'] == -1) | (gdf['db_label'] == -1))
+
+        # idle 조건 추가
+        if 'gpu_util' in gdf.columns:
+            idle_mask = (
+                (gdf['both_anomaly'] | gdf['one_anomaly']) &
+                (gdf['gpu_util'] < 35)
+            )
+        else:
+            idle_mask = gdf['both_anomaly']
+
+        idle_rows = gdf[idle_mask]
+
+        if len(idle_rows) == 0:
+            continue
+
+        # 신뢰도: both_anomaly 비율로 계산
+        both_ratio = idle_rows['both_anomaly'].mean()
+        confidence = min(95, 60 + both_ratio * 35 + (len(idle_rows) / len(gdf)) * 20)
+
+        rate = idle_rows['electricity_rate'].mean() if 'electricity_rate' in idle_rows.columns else 3.20
+        savings = len(idle_rows) * rate * 0.70
+        worst_hour = idle_rows.groupby('hour').size().idxmax() if 'hour' in idle_rows.columns else 0
+
+        results.append({
+            'gpu_id':           gpu,
+            'idle_hours':       len(idle_rows),
+            'avg_util_pct':     round(idle_rows['gpu_util'].mean(), 1) if 'gpu_util' in idle_rows.columns else 0,
+            'worst_hour':       worst_hour,
+            'monthly_savings':  round(savings, 2),
+            'confidence_pct':   round(confidence, 1),
+            'both_anomaly_pct': round(both_ratio * 100, 1),
+            'contamination':    round(contamination, 3),
+            'detection_method': 'IsolationForest + DBSCAN (v2)',
+        })
+
+    return pd.DataFrame(results).sort_values('monthly_savings', ascending=False) if results else pd.DataFrame()
+
+
+def detect_idle_final(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    최종 결합:
+    Rule-based + Z-score (v1) + IsolationForest + DBSCAN (v2)
+    신뢰도 기반 가중 평균
+    """
+    rule_df = detect_idle_advanced(df)
+    ml_df   = detect_idle_ml_v2(df)
+
+    if len(rule_df) == 0 and len(ml_df) == 0:
+        return pd.DataFrame()
+    if len(rule_df) == 0:
+        ml_df['detection_method'] = 'ML v2 only'
+        return ml_df
+    if len(ml_df) == 0:
+        rule_df['detection_method'] = 'Rule only'
+        return rule_df
+
+    merged = rule_df.merge(
+        ml_df[['gpu_id', 'idle_hours', 'monthly_savings',
+               'confidence_pct', 'both_anomaly_pct']],
+        on='gpu_id', how='outer', suffixes=('_rule', '_ml')
+    )
+
+    final = []
+    for _, row in merged.iterrows():
+        rule_s  = row.get('monthly_savings_rule', 0) or 0
+        ml_s    = row.get('monthly_savings_ml', 0)   or 0
+        rule_c  = row.get('confidence_pct_rule', 0)  or 0
+        ml_c    = row.get('confidence_pct_ml', 0)    or 0
+        both    = row.get('both_anomaly_pct', 0)      or 0
+
+        if rule_s > 0 and ml_s > 0:
+            # 신뢰도 기반 가중 평균
+            w_rule = rule_c / (rule_c + ml_c + 0.001)
+            w_ml   = ml_c  / (rule_c + ml_c + 0.001)
+            savings    = rule_s * w_rule + ml_s * w_ml
+            confidence = min(95, (rule_c + ml_c) / 2 + both * 0.1 + 8)
+            method     = f'Rule + IF + DBSCAN (conf: {confidence:.0f}%)'
+        elif rule_s > 0:
+            savings, confidence = rule_s, rule_c
+            method = 'Rule-based only'
+        else:
+            savings    = ml_s
+            confidence = ml_c * 0.90
+            method     = 'ML v2 only'
+
+        final.append({
+            'gpu_id':           row['gpu_id'],
+            'idle_hours':       int(row.get('idle_hours_rule') or row.get('idle_hours_ml', 0)),
+            'avg_util_pct':     row.get('avg_util_pct', 0),
+            'worst_hour':       int(row.get('worst_hour', 0)),
+            'monthly_savings':  round(savings, 2),
+            'confidence_pct':   round(confidence, 1),
+            'detection_method': method,
+        })
+
+    return pd.DataFrame(final).sort_values('monthly_savings', ascending=False)
