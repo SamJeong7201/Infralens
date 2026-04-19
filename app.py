@@ -187,6 +187,32 @@ if data_type == 'billing':
             </div>
         </div>""", unsafe_allow_html=True)
 
+
+    # PDF 다운로드
+    from report_pdf import generate_pdf
+    import warnings
+    warnings.filterwarnings('ignore')
+    st.markdown('<div style="height:16px"></div>', unsafe_allow_html=True)
+    company_name_b = st.text_input('Company name (for report)', value='Your Company', key='billing_company')
+    if st.button('Generate PDF Report', use_container_width=True, key='billing_pdf'):
+        with st.spinner('Generating PDF...'):
+            sim_billing = {
+            'before_monthly': billing.get('monthly_cost', 0),
+            'after_monthly': billing.get('monthly_cost', 0) - billing.get('monthly_savings', 0),
+            'savings_monthly': billing.get('monthly_savings', 0),
+            'savings_pct': round(billing.get('monthly_savings', 0) / max(billing.get('monthly_cost', 1), 1) * 100, 1),
+            'savings_annual': billing.get('monthly_savings', 0) * 12,
+            }
+            from report_pdf import generate_billing_pdf
+            pdf_bytes = generate_billing_pdf(billing, quality, company_name=company_name_b)
+        st.download_button(
+            label='Download Full Report (.pdf)',
+            data=pdf_bytes,
+            file_name='infralens_report.pdf',
+            mime='application/pdf',
+            use_container_width=True,
+            key='billing_dl'
+        )
 else:
     # ── TIMESERIES 분석 ──
     with st.spinner("Running advanced analysis..."):
@@ -303,15 +329,20 @@ else:
             </div>
         </div>""", unsafe_allow_html=True)
 
-    report_text = format_report(recs, sim, quality)
-    st.markdown('<div style="height:16px"></div>', unsafe_allow_html=True)
-    st.download_button(
-        label="Download Full Report (.txt)",
-        data=report_text,
-        file_name="infralens_report.txt",
-        mime="text/plain",
-        use_container_width=True
-    )
+    from report_pdf import generate_pdf
+    import warnings
+    warnings.filterwarnings('ignore')
+    company_name = st.text_input('Company name (for report)', value='Your Company')
+    if st.button('Generate PDF Report', use_container_width=True):
+        with st.spinner('Generating PDF...'):
+            pdf_bytes = generate_pdf(recs, sim, quality, scores, df=df, company_name=company_name)
+        st.download_button(
+            label='Download Full Report (.pdf)',
+            data=pdf_bytes,
+            file_name='infralens_report.pdf',
+            mime='application/pdf',
+            use_container_width=True
+        )
 
 # ── AI 매핑 공통 ──
 with st.expander(f"AI Column Mapping — {len(col_map)} columns detected ({quality.get('tier','?')} tier)"):
