@@ -552,7 +552,8 @@ def detect_idle_ml_v2(df: pd.DataFrame) -> pd.DataFrame:
         gdf['iso_score'] = iso_scores
 
         # ── DBSCAN ──
-        dbscan = DBSCAN(eps=1.2, min_samples=3)
+        best_eps = optimize_dbscan_eps(X_scaled)
+        dbscan = DBSCAN(eps=best_eps, min_samples=3)
         db_labels = dbscan.fit_predict(X_scaled)
         gdf['db_label'] = db_labels  # -1 = 이상치
 
@@ -813,3 +814,29 @@ def detect_idle_ultimate(df: pd.DataFrame) -> pd.DataFrame:
         })
 
     return pd.DataFrame(results).sort_values('monthly_savings', ascending=False)
+
+
+def optimize_dbscan_eps(X_scaled: 'np.ndarray') -> float:
+    """
+    Silhouette score 기반 DBSCAN eps 자동 최적화
+    """
+    from sklearn.metrics import silhouette_score
+    from sklearn.cluster import DBSCAN
+
+    best_eps   = 1.2
+    best_score = -1
+
+    for eps in [0.5, 0.8, 1.0, 1.2, 1.5, 2.0, 2.5]:
+        try:
+            labels = DBSCAN(eps=eps, min_samples=3).fit_predict(X_scaled)
+            n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+            if n_clusters < 2:
+                continue
+            score = silhouette_score(X_scaled, labels)
+            if score > best_score:
+                best_score = score
+                best_eps   = eps
+        except:
+            continue
+
+    return best_eps
