@@ -1,92 +1,85 @@
 from fpdf import FPDF, XPos, YPos
 from datetime import datetime
 import io
-import math
 
 # ── 색상 ──
-BRAND     = (99, 102, 241)
-BRAND_D   = (79, 70, 229)
-GREEN     = (5, 150, 105)
-GREEN_L   = (209, 250, 229)
-RED       = (220, 38, 38)
-RED_L     = (254, 226, 226)
-AMBER     = (217, 119, 6)
-AMBER_L   = (254, 243, 199)
-BLUE      = (37, 99, 235)
-DARK      = (17, 24, 39)
-GRAY      = (107, 114, 128)
-LGRAY     = (248, 250, 252)
-LLGRAY    = (243, 244, 246)
-WHITE     = (255, 255, 255)
-BORDER    = (226, 232, 240)
+BRAND    = (99, 102, 241)
+GREEN    = (5, 150, 105)
+GREEN_L  = (209, 250, 229)
+RED      = (220, 38, 38)
+RED_L    = (254, 226, 226)
+AMBER    = (217, 119, 6)
+AMBER_L  = (254, 243, 199)
+BLUE     = (37, 99, 235)
+DARK     = (17, 24, 39)
+GRAY     = (107, 114, 128)
+LGRAY    = (248, 250, 252)
+LLGRAY   = (243, 244, 246)
+WHITE    = (255, 255, 255)
+BORDER   = (226, 232, 240)
 PURPLE_BG = (245, 243, 255)
 PURPLE_BD = (199, 194, 254)
 
+
 def s(text):
+    """특수문자 안전 변환"""
     if not isinstance(text, str):
         text = str(text)
+    mp = {
+        '\u2014':'-', '\u2013':'-', '\u2012':'-', '\u2011':'-', '\u2010':'-',
+        '\u2018':"'", '\u2019':"'", '\u201c':'"', '\u201d':'"',
+        '\u2022':'-', '\u00b7':'.', '\u2026':'...',
+        '\u2192':'->', '\u2190':'<-', '\u2713':'OK', '\u2717':'X',
+        '\u00b0':'deg', '\u00b1':'+/-', '\u00d7':'x', '\u00f7':'/',
+        '\u2264':'<=', '\u2265':'>=', '\u2260':'!=',
+        '\u00a0':' ', '\u200b':'', '\ufeff':'',
+        '\u03bc':'u', '\u03c3':'s', '\u03c0':'pi',
+        '\u00e9':'e', '\u00e8':'e', '\u00e0':'a',
+        '\u00ae':'(R)', '\u00a9':'(C)', '\u2122':'(TM)',
+        '\u20ac':'EUR', '\u00a3':'GBP',
+    }
     result = ''
     for c in text:
         try:
             c.encode('latin-1')
             result += c
         except:
-            mp = {'\u2014':'-','\u2013':'-','\u2018':"'",'\u2019':"'",
-                  '\u201c':'"','\u201d':'"','\u2022':'-','\u00b7':'.',
-                  '\u2026':'...','\u03a3':'SUM','\u00d7':'x','\u00b2':'2',
-                  '\u03bc':'u','\u03c3':'s','\u00b0':'deg','\u2192':'->'}
-            result += mp.get(c, '?')
+            result += mp.get(c, '-')
     return result
 
-def safe_num(val, fmt='${:,.0f}', fallback='N/A'):
-    try:
-        return fmt.format(float(val))
-    except:
-        return fallback
 
-
-def truncate(text, max_chars=85, suffix='...'):
+def truncate(text, n=75):
     text = s(str(text))
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars - len(suffix)] + suffix
+    return text if len(text) <= n else text[:n-3] + '...'
 
 
-def wrap_text(text, max_chars=85):
-    """\n 유지하면서 max_chars 기준으로 줄 나누기"""
+def wrap_lines(text, max_chars=80):
+    """\\n 유지하면서 max_chars 기준으로 줄 나누기"""
     text = s(str(text))
-    result_lines = []
-    # 먼저 \n으로 분리
-    for paragraph in text.split('\n'):
-        paragraph = paragraph.rstrip()
-        if paragraph == '':
-            result_lines.append('')
+    result = []
+    for para in text.split('\n'):
+        para = para.rstrip()
+        if not para:
+            result.append('')
             continue
-        # 각 단락을 max_chars로 줄 나누기
-        words = paragraph.split(' ')
-        current = ''
-        for word in words:
-            if not word:
-                current += ' '
+        words = para.split(' ')
+        cur = ''
+        for w in words:
+            if not w:
                 continue
-            if len(current) + len(word) + (1 if current else 0) <= max_chars:
-                current = current + ' ' + word if current.strip() else word
+            if len(cur) + len(w) + (1 if cur else 0) <= max_chars:
+                cur = cur + ' ' + w if cur else w
             else:
-                if current.strip():
-                    result_lines.append(current)
-                current = word
-        if current.strip():
-            result_lines.append(current)
-        elif not current.strip() and paragraph:
-            result_lines.append('')
-    return result_lines if result_lines else ['']
-
-
-def count_lines(text, max_chars=85):
-    return max(1, len(wrap_text(text, max_chars)))
+                if cur:
+                    result.append(cur)
+                cur = w
+        if cur:
+            result.append(cur)
+    return result or ['']
 
 
 class PDF(FPDF):
+
     def header(self):
         if self.page_no() == 1:
             return
@@ -95,9 +88,9 @@ class PDF(FPDF):
         self.set_y(8)
         self.set_font('Helvetica', 'B', 7)
         self.set_text_color(*GRAY)
-        self.cell(87, 4, 'InfraLens - AI Infrastructure Cost Optimization Report')
+        self.cell(87, 4, 'InfraLens - AI Infrastructure Cost Optimization')
         self.cell(0, 4, f'Page {self.page_no()}', align='R')
-        self.ln(7)
+        self.ln(6)
 
     def footer(self):
         self.set_y(-12)
@@ -105,850 +98,385 @@ class PDF(FPDF):
         self.set_text_color(*GRAY)
         self.cell(0, 4, f'InfraLens - infralens.streamlit.app - Confidential - {datetime.now().strftime("%Y-%m-%d")}', align='C')
 
-    def divider(self, t=6, b=6, color=BORDER):
+    def h1(self, text):
+        self.set_font('Helvetica', 'B', 13)
+        self.set_text_color(*DARK)
+        self.cell(0, 8, s(text), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.ln(2)
+
+    def h2(self, text):
+        self.set_font('Helvetica', 'B', 9)
+        self.set_text_color(*BRAND)
+        self.cell(0, 6, s(text), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.ln(1)
+
+    def body(self, text, color=DARK, size=8.5):
+        self.set_font('Helvetica', '', size)
+        self.set_text_color(*color)
+        self.multi_cell(0, 5, s(str(text)))
+        self.ln(1)
+
+    def divider(self, t=4, b=4):
         self.ln(t)
-        self.set_draw_color(*color)
+        self.set_draw_color(*BORDER)
         self.set_line_width(0.3)
         self.line(16, self.get_y(), 194, self.get_y())
         self.ln(b)
 
-    def h1(self, text, color=DARK):
-        self.set_font('Helvetica', 'B', 15)
-        self.set_text_color(*color)
-        self.cell(0, 9, s(text), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.ln(1)
-
-    def h2(self, text, color=BRAND):
-        self.set_font('Helvetica', 'B', 9)
-        self.set_text_color(*color)
-        self.cell(0, 6, s(text), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.ln(1)
-
-    def body(self, text, color=DARK, size=9):
-        self.set_font('Helvetica', '', size)
-        self.set_text_color(*color)
-        self.multi_cell(0, 5, s(text))
-        self.ln(1)
-
-    def tag(self, text, bg, fg):
-        self.set_fill_color(*bg)
-        self.set_text_color(*fg)
-        self.set_font('Helvetica', 'B', 7)
-        self.cell(len(text) * 2.8 + 6, 5, s(text), fill=True)
-
-    def metric_card(self, x, y, w, h, label, value, sub, color, bg=LGRAY):
-        self.set_fill_color(*bg)
-        self.set_draw_color(*BORDER)
-        self.set_line_width(0.3)
-        self.rect(x, y, w, h, 'FD')
-        # 상단 컬러 바
-        self.set_fill_color(*color)
-        self.rect(x, y, w, 2, 'F')
-        self.set_xy(x + 3, y + 4)
-        self.set_font('Helvetica', '', 6)
-        self.set_text_color(*GRAY)
-        self.cell(w - 5, 3.5, s(label).upper())
-        self.set_xy(x + 3, y + 9)
-        self.set_font('Helvetica', 'B', 14)
-        self.set_text_color(*color)
-        self.cell(w - 5, 8, s(value))
-        self.set_xy(x + 3, y + 18)
-        self.set_font('Helvetica', '', 6.5)
-        self.set_text_color(*GRAY)
-        self.cell(w - 5, 4, s(sub))
-
-    def bar_chart_h(self, data, labels, title, width=178, bar_h=7, color=BRAND):
-        """수평 바 차트"""
-        if not data:
-            return
-        self.set_font('Helvetica', 'B', 8)
-        self.set_text_color(*DARK)
-        self.cell(0, 5, s(title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.ln(1)
-
-        max_val = max(data) if max(data) > 0 else 1
-        label_w = 45
-        bar_area = width - label_w - 25
-
-        for i, (val, label) in enumerate(zip(data, labels)):
-            y = self.get_y()
-            bar_len = (val / max_val) * bar_area
-
-            # 라벨
-            self.set_xy(16, y)
-            self.set_font('Helvetica', '', 7.5)
-            self.set_text_color(*DARK)
-            self.cell(label_w, bar_h, s(str(label)[:14]))
-
-            # 바
+    def metric_cards(self, items):
+        """items: [(label, value, color), ...]"""
+        n = len(items)
+        w = 178 / n
+        y0 = self.get_y()
+        h = 24
+        for i, (label, value, color) in enumerate(items):
+            x = 16 + i * w
+            self.set_fill_color(*LGRAY)
+            self.set_draw_color(*BORDER)
+            self.set_line_width(0.3)
+            self.rect(x, y0, w - 1, h, 'FD')
             self.set_fill_color(*color)
-            self.rect(16 + label_w, y + 1, max(bar_len, 1), bar_h - 2, 'F')
-
-            # 값
-            self.set_xy(16 + label_w + bar_len + 2, y)
-            self.set_font('Helvetica', 'B', 7)
+            self.rect(x, y0, w - 1, 2, 'F')
+            self.set_xy(x + 2, y0 + 4)
+            self.set_font('Helvetica', '', 6)
             self.set_text_color(*GRAY)
-            self.cell(25, bar_h, f'${val:,.0f}')
-
-            self.ln(bar_h + 1)
-        self.ln(2)
-
-    def bar_chart_v(self, data, labels, title, width=178, height=45, highlight_fn=None, color=BRAND):
-        """수직 바 차트"""
-        self.set_font('Helvetica', 'B', 8)
-        self.set_text_color(*DARK)
-        self.cell(0, 5, s(title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.ln(1)
-
-        chart_x = 16
-        chart_y = self.get_y()
-        max_val = max(data) if max(data) > 0 else 1
-        n = len(data)
-        bar_w = (width - 8) / n
-        bar_area_h = height - 10
-
-        self.set_fill_color(*LGRAY)
-        self.set_draw_color(*BORDER)
-        self.set_line_width(0.2)
-        self.rect(chart_x, chart_y, width, height, 'FD')
-
-        for i, (val, label) in enumerate(zip(data, labels)):
-            bar_h_val = (val / max_val) * bar_area_h
-            bx = chart_x + 4 + i * bar_w
-            by = chart_y + height - 8 - bar_h_val
-            bc = highlight_fn(val, i) if highlight_fn else color
-            self.set_fill_color(*bc)
-            self.rect(bx, by, max(bar_w - 1.5, 1), bar_h_val, 'F')
-            self.set_xy(bx, chart_y + height - 7)
-            self.set_font('Helvetica', '', 4.5)
-            self.set_text_color(*GRAY)
-            self.cell(max(bar_w - 1.5, 1), 4, str(label), align='C')
-
-        self.set_y(chart_y + height + 3)
-
-    def cumulative_savings_chart(self, monthly_savings, width=178, height=45):
-        """누적 절감액 차트"""
-        self.set_font('Helvetica', 'B', 8)
-        self.set_text_color(*DARK)
-        self.cell(0, 5, 'Cumulative Savings Over 12 Months', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.ln(1)
-
-        chart_x = 16
-        chart_y = self.get_y()
-        months = list(range(1, 13))
-        vals = [monthly_savings * m for m in months]
-        max_val = vals[-1]
-        bar_area_h = height - 10
-        bar_w = (width - 8) / 12
-
-        self.set_fill_color(*LGRAY)
-        self.set_draw_color(*BORDER)
-        self.set_line_width(0.2)
-        self.rect(chart_x, chart_y, width, height, 'FD')
-
-        for i, (m, val) in enumerate(zip(months, vals)):
-            bar_h_val = (val / max_val) * bar_area_h
-            bx = chart_x + 4 + i * bar_w
-            by = chart_y + height - 8 - bar_h_val
-            # 그라데이션 효과 (색상 점점 진해짐)
-            intensity = int(99 + (i / 11) * 50)
-            self.set_fill_color(intensity, 102, 241)
-            self.rect(bx, by, max(bar_w - 1.5, 1), bar_h_val, 'F')
-            if i % 3 == 0:
-                self.set_xy(bx, chart_y + height - 7)
-                self.set_font('Helvetica', '', 5)
-                self.set_text_color(*GRAY)
-                self.cell(max(bar_w * 3, 1), 4, f'M{m}', align='C')
-
-        # 최종값 표시
-        self.set_xy(chart_x + width - 45, chart_y + 3)
-        self.set_font('Helvetica', 'B', 7)
-        self.set_text_color(*GREEN)
-        self.cell(40, 5, f'Year 1: ${max_val:,.0f}', align='R')
-
-        self.set_y(chart_y + height + 3)
-
-    def before_after_chart(self, before, after, width=178, height=50):
-        self.set_font('Helvetica', 'B', 8)
-        self.set_text_color(*DARK)
-        self.cell(0, 5, 'Monthly Cost: Before vs After Optimization', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.ln(1)
-
-        chart_x = 16
-        chart_y = self.get_y()
-        max_val = before * 1.1
-        bar_area_h = height - 14
-        bar_w = 38
-
-        self.set_fill_color(*LGRAY)
-        self.set_draw_color(*BORDER)
-        self.set_line_width(0.2)
-        self.rect(chart_x, chart_y, width, height, 'FD')
-
-        savings = before - after
-        items = [
-            ('Current Cost',  before,  RED,   f'${before:,.0f}'),
-            ('After Optim.',  after,   GREEN, f'${after:,.0f}'),
-            ('Monthly Saved', savings, BRAND, f'${savings:,.0f}'),
-        ]
-
-        for i, (label, val, color, val_str) in enumerate(items):
-            bar_h_val = (val / max_val) * bar_area_h
-            bx = chart_x + 15 + i * 58
-            by = chart_y + height - 12 - bar_h_val
-            self.set_fill_color(*color)
-            self.rect(bx, by, bar_w, bar_h_val, 'F')
-            self.set_xy(bx, by - 6)
-            self.set_font('Helvetica', 'B', 7)
+            self.cell(w - 4, 3, s(label).upper())
+            self.set_xy(x + 2, y0 + 9)
+            self.set_font('Helvetica', 'B', 12)
             self.set_text_color(*color)
-            self.cell(bar_w, 5, val_str, align='C')
-            self.set_xy(bx, chart_y + height - 10)
-            self.set_font('Helvetica', '', 7)
-            self.set_text_color(*DARK)
-            self.cell(bar_w, 5, label, align='C')
+            self.cell(w - 4, 7, s(value))
+        self.set_y(y0 + h + 4)
 
-        self.set_y(chart_y + height + 4)
+    def action_card(self, num, category, title, detail, action,
+                    savings, effort, timeframe, confidence,
+                    risk='Low', owner='DevOps', timeline='Week 1'):
+        """
+        Action card - 텍스트 먼저 측정 후 그리기
+        """
+        # 최대 10줄로 action 제한
+        action_list = wrap_lines(action, 76)
+        if len(action_list) > 10:
+            action_list = action_list[:9] + ['... full commands available in InfraLens dashboard']
 
-    def finding_card(self, num, category, title, detail, action, savings,
-                     effort, timeframe, confidence, risk='Low', owner='DevOps Team',
-                     timeline='Week 1', extra_info=None):
+        detail_list = wrap_lines(detail, 80)
 
-        effort_color = GREEN if effort == 'Low' else AMBER if effort == 'Medium' else RED
-        risk_color   = GREEN if risk == 'Low' else AMBER if risk == 'Medium' else RED
+        # 높이 계산
+        h = 6                              # 상단 여백
+        h += 5                             # 카테고리 태그
+        h += 6                             # 제목
+        h += len(detail_list) * 5.0 + 3   # detail
+        h += 5                             # "Recommended Action:" 라벨
+        h += len(action_list) * 5.0 + 8   # action 박스
+        h += 12                            # 하단 절감액
+        h += 4                             # 하단 여백
 
-        if self.get_y() > 230:
+        # 페이지 체크
+        if self.get_y() + h > 268:
             self.add_page()
 
-        y_start = self.get_y()
+        y0 = self.get_y()
         x0 = 16
-        w  = 178
-        cur_y = y_start + 4
 
-        # ─ 카테고리 + 태그 ─
-        self.set_xy(23, cur_y)
-        self.set_font('Helvetica', 'B', 7)
-        self.set_text_color(*BRAND)
-        self.cell(50, 4, s(f'#{num} - {category.upper()}'))
-
-        tag_x = 120
-        for tag_text, tag_bg, tag_fg in [
-            (f'Effort: {effort}', AMBER_L, AMBER),
-            (f'Risk: {risk}', RED_L if risk=="High" else AMBER_L if risk=="Medium" else GREEN_L, risk_color),
-            (f'Owner: {owner[:8]}', PURPLE_BG, BRAND),
-        ]:
-            self.set_xy(tag_x, cur_y)
-            self.set_fill_color(*tag_bg)
-            self.set_text_color(*tag_fg)
-            self.set_font('Helvetica', 'B', 6.5)
-            tw = min(len(tag_text) * 2.5 + 6, 42)
-            self.cell(tw, 4, s(tag_text), fill=True, align='C')
-            tag_x += tw + 2
-        cur_y += 6
-
-        # ─ 제목 ─
-        self.set_xy(23, cur_y)
-        self.set_font('Helvetica', 'B', 10)
-        self.set_text_color(*DARK)
-        self.cell(w - 10, 5, truncate(title, 72))
-        cur_y += 7
-
-        # ─ Detail ─
-        self.set_font('Helvetica', '', 8)
-        self.set_text_color(*GRAY)
-        for line in wrap_text(detail, 82):
-            if cur_y > 268:
-                self.add_page()
-                cur_y = self.get_y()
-            self.set_xy(23, cur_y)
-            self.cell(168, 5.0, line)
-            cur_y += 5.0
-        cur_y += 3
-
-        # ─ Extra info ─
-        if extra_info:
-            extra_lines_list = wrap_text(extra_info, 80)
-            extra_box_h = len(extra_lines_list) * 5.0 + 6
-            self.set_fill_color(236, 253, 245)
-            self.set_draw_color(167, 243, 208)
-            self.set_line_width(0.2)
-            self.rect(23, cur_y, 168, extra_box_h, 'FD')
-            line_y = cur_y + 3
-            self.set_font('Helvetica', 'I', 7.5)
-            self.set_text_color(6, 95, 70)
-            for line in extra_lines_list:
-                self.set_xy(26, line_y)
-                self.cell(163, 5.0, line)
-                line_y += 5.0
-            cur_y += extra_box_h + 3
-
-        # ─ Recommended Action 라벨 ─
-        self.set_xy(23, cur_y)
-        self.set_font('Helvetica', 'B', 8)
-        self.set_text_color(*BRAND)
-        self.cell(0, 4, 'Recommended Action:')
-        cur_y += 6
-
-        # ─ Action 박스: 최대 15줄로 제한 ─
-        action_lines_list = wrap_text(action, 76)
-        if len(action_lines_list) > 15:
-            action_lines_list = action_lines_list[:14] + ['... (see full plan in dashboard)']
-        action_box_h = len(action_lines_list) * 5.2 + 6
-
-        # 페이지 넘으면 새 페이지
-        if cur_y + action_box_h + 20 > 272:
-            self.add_page()
-            cur_y = self.get_y()
-
-        # 박스 그리기
-        self.set_fill_color(*PURPLE_BG)
-        self.set_draw_color(*PURPLE_BD)
-        self.set_line_width(0.2)
-        self.rect(23, cur_y, 168, action_box_h, 'FD')
-
-        # 텍스트 쓰기
-        line_y = cur_y + 3
-        self.set_font('Helvetica', '', 7.5)
-        self.set_text_color(*DARK)
-        for line in action_lines_list:
-            self.set_xy(26, line_y)
-            self.cell(163, 5.2, line)
-            line_y += 5.2
-        cur_y += action_box_h + 4
-
-        # ─ 하단 절감액 바 ─
-        self.set_fill_color(236, 253, 245)
-        self.rect(23, cur_y, 168, 12, 'F')
-
-        self.set_xy(26, cur_y + 2)
-        self.set_font('Helvetica', 'B', 11)
-        self.set_text_color(*GREEN)
-        saving_str = f'Save ${savings:,.0f}/mo  (${savings*12:,.0f}/yr)' if savings > 0 else 'Performance improvement'
-        self.cell(80, 7, s(saving_str))
-
-        self.set_xy(112, cur_y + 2)
-        self.set_font('Helvetica', '', 7.5)
-        self.set_text_color(*GRAY)
-        self.cell(20, 4, s(f'Timeline: {timeline}'))
-        self.set_xy(112, cur_y + 6)
-        self.cell(30, 4, s(f'Confidence: {confidence:.0f}%'))
-
-        self.set_xy(152, cur_y + 4)
-        self.set_font('Helvetica', 'B', 7.5)
-        self.set_text_color(*BRAND)
-        self.cell(35, 4, s(f'Timeframe: {timeframe}'))
-        cur_y += 14
-
-        # ─ 전체 카드 박스 (뒤에 그리기) ─
-        card_h = cur_y + 4 - y_start
-        self.set_fill_color(*WHITE)
-        self.set_draw_color(*BORDER)
-        self.set_line_width(0.3)
-        # 카드 테두리만 (fill 없이)
-        self.rect(x0 + 3.5, y_start, w - 3.5, card_h, 'D')
-        # 왼쪽 바
-        self.set_fill_color(*BRAND)
-        self.rect(x0, y_start, 3.5, card_h, 'F')
-
-        self.set_y(cur_y + 6)
-
-class PDF(FPDF):
-    def header(self):
-        if self.page_no() == 1:
-            return
-        self.set_fill_color(*BRAND)
-        self.rect(0, 0, 210, 5, 'F')
-        self.set_y(8)
-        self.set_font('Helvetica', 'B', 7)
-        self.set_text_color(*GRAY)
-        self.cell(87, 4, 'InfraLens - AI Infrastructure Cost Optimization Report')
-        self.cell(0, 4, f'Page {self.page_no()}', align='R')
-        self.ln(7)
-
-    def footer(self):
-        self.set_y(-12)
-        self.set_font('Helvetica', '', 7)
-        self.set_text_color(*GRAY)
-        self.cell(0, 4, f'InfraLens - infralens.streamlit.app - Confidential - {datetime.now().strftime("%Y-%m-%d")}', align='C')
-
-    def divider(self, t=6, b=6, color=BORDER):
-        self.ln(t)
-        self.set_draw_color(*color)
-        self.set_line_width(0.3)
-        self.line(16, self.get_y(), 194, self.get_y())
-        self.ln(b)
-
-    def h1(self, text, color=DARK):
-        self.set_font('Helvetica', 'B', 15)
-        self.set_text_color(*color)
-        self.cell(0, 9, s(text), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.ln(1)
-
-    def h2(self, text, color=BRAND):
-        self.set_font('Helvetica', 'B', 9)
-        self.set_text_color(*color)
-        self.cell(0, 6, s(text), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.ln(1)
-
-    def body(self, text, color=DARK, size=9):
-        self.set_font('Helvetica', '', size)
-        self.set_text_color(*color)
-        self.multi_cell(0, 5, s(text))
-        self.ln(1)
-
-    def tag(self, text, bg, fg):
-        self.set_fill_color(*bg)
-        self.set_text_color(*fg)
-        self.set_font('Helvetica', 'B', 7)
-        self.cell(len(text) * 2.8 + 6, 5, s(text), fill=True)
-
-    def metric_card(self, x, y, w, h, label, value, sub, color, bg=LGRAY):
-        self.set_fill_color(*bg)
-        self.set_draw_color(*BORDER)
-        self.set_line_width(0.3)
-        self.rect(x, y, w, h, 'FD')
-        # 상단 컬러 바
-        self.set_fill_color(*color)
-        self.rect(x, y, w, 2, 'F')
-        self.set_xy(x + 3, y + 4)
-        self.set_font('Helvetica', '', 6)
-        self.set_text_color(*GRAY)
-        self.cell(w - 5, 3.5, s(label).upper())
-        self.set_xy(x + 3, y + 9)
-        self.set_font('Helvetica', 'B', 14)
-        self.set_text_color(*color)
-        self.cell(w - 5, 8, s(value))
-        self.set_xy(x + 3, y + 18)
-        self.set_font('Helvetica', '', 6.5)
-        self.set_text_color(*GRAY)
-        self.cell(w - 5, 4, s(sub))
-
-    def bar_chart_h(self, data, labels, title, width=178, bar_h=7, color=BRAND):
-        """수평 바 차트"""
-        if not data:
-            return
-        self.set_font('Helvetica', 'B', 8)
-        self.set_text_color(*DARK)
-        self.cell(0, 5, s(title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.ln(1)
-
-        max_val = max(data) if max(data) > 0 else 1
-        label_w = 45
-        bar_area = width - label_w - 25
-
-        for i, (val, label) in enumerate(zip(data, labels)):
-            y = self.get_y()
-            bar_len = (val / max_val) * bar_area
-
-            # 라벨
-            self.set_xy(16, y)
-            self.set_font('Helvetica', '', 7.5)
-            self.set_text_color(*DARK)
-            self.cell(label_w, bar_h, s(str(label)[:14]))
-
-            # 바
-            self.set_fill_color(*color)
-            self.rect(16 + label_w, y + 1, max(bar_len, 1), bar_h - 2, 'F')
-
-            # 값
-            self.set_xy(16 + label_w + bar_len + 2, y)
-            self.set_font('Helvetica', 'B', 7)
-            self.set_text_color(*GRAY)
-            self.cell(25, bar_h, f'${val:,.0f}')
-
-            self.ln(bar_h + 1)
-        self.ln(2)
-
-    def bar_chart_v(self, data, labels, title, width=178, height=45, highlight_fn=None, color=BRAND):
-        """수직 바 차트"""
-        self.set_font('Helvetica', 'B', 8)
-        self.set_text_color(*DARK)
-        self.cell(0, 5, s(title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.ln(1)
-
-        chart_x = 16
-        chart_y = self.get_y()
-        max_val = max(data) if max(data) > 0 else 1
-        n = len(data)
-        bar_w = (width - 8) / n
-        bar_area_h = height - 10
-
-        self.set_fill_color(*LGRAY)
-        self.set_draw_color(*BORDER)
-        self.set_line_width(0.2)
-        self.rect(chart_x, chart_y, width, height, 'FD')
-
-        for i, (val, label) in enumerate(zip(data, labels)):
-            bar_h_val = (val / max_val) * bar_area_h
-            bx = chart_x + 4 + i * bar_w
-            by = chart_y + height - 8 - bar_h_val
-            bc = highlight_fn(val, i) if highlight_fn else color
-            self.set_fill_color(*bc)
-            self.rect(bx, by, max(bar_w - 1.5, 1), bar_h_val, 'F')
-            self.set_xy(bx, chart_y + height - 7)
-            self.set_font('Helvetica', '', 4.5)
-            self.set_text_color(*GRAY)
-            self.cell(max(bar_w - 1.5, 1), 4, str(label), align='C')
-
-        self.set_y(chart_y + height + 3)
-
-    def cumulative_savings_chart(self, monthly_savings, width=178, height=45):
-        """누적 절감액 차트"""
-        self.set_font('Helvetica', 'B', 8)
-        self.set_text_color(*DARK)
-        self.cell(0, 5, 'Cumulative Savings Over 12 Months', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.ln(1)
-
-        chart_x = 16
-        chart_y = self.get_y()
-        months = list(range(1, 13))
-        vals = [monthly_savings * m for m in months]
-        max_val = vals[-1]
-        bar_area_h = height - 10
-        bar_w = (width - 8) / 12
-
-        self.set_fill_color(*LGRAY)
-        self.set_draw_color(*BORDER)
-        self.set_line_width(0.2)
-        self.rect(chart_x, chart_y, width, height, 'FD')
-
-        for i, (m, val) in enumerate(zip(months, vals)):
-            bar_h_val = (val / max_val) * bar_area_h
-            bx = chart_x + 4 + i * bar_w
-            by = chart_y + height - 8 - bar_h_val
-            # 그라데이션 효과 (색상 점점 진해짐)
-            intensity = int(99 + (i / 11) * 50)
-            self.set_fill_color(intensity, 102, 241)
-            self.rect(bx, by, max(bar_w - 1.5, 1), bar_h_val, 'F')
-            if i % 3 == 0:
-                self.set_xy(bx, chart_y + height - 7)
-                self.set_font('Helvetica', '', 5)
-                self.set_text_color(*GRAY)
-                self.cell(max(bar_w * 3, 1), 4, f'M{m}', align='C')
-
-        # 최종값 표시
-        self.set_xy(chart_x + width - 45, chart_y + 3)
-        self.set_font('Helvetica', 'B', 7)
-        self.set_text_color(*GREEN)
-        self.cell(40, 5, f'Year 1: ${max_val:,.0f}', align='R')
-
-        self.set_y(chart_y + height + 3)
-
-    def before_after_chart(self, before, after, width=178, height=50):
-        self.set_font('Helvetica', 'B', 8)
-        self.set_text_color(*DARK)
-        self.cell(0, 5, 'Monthly Cost: Before vs After Optimization', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.ln(1)
-
-        chart_x = 16
-        chart_y = self.get_y()
-        max_val = before * 1.1
-        bar_area_h = height - 14
-        bar_w = 38
-
-        self.set_fill_color(*LGRAY)
-        self.set_draw_color(*BORDER)
-        self.set_line_width(0.2)
-        self.rect(chart_x, chart_y, width, height, 'FD')
-
-        savings = before - after
-        items = [
-            ('Current Cost',  before,  RED,   f'${before:,.0f}'),
-            ('After Optim.',  after,   GREEN, f'${after:,.0f}'),
-            ('Monthly Saved', savings, BRAND, f'${savings:,.0f}'),
-        ]
-
-        for i, (label, val, color, val_str) in enumerate(items):
-            bar_h_val = (val / max_val) * bar_area_h
-            bx = chart_x + 15 + i * 58
-            by = chart_y + height - 12 - bar_h_val
-            self.set_fill_color(*color)
-            self.rect(bx, by, bar_w, bar_h_val, 'F')
-            self.set_xy(bx, by - 6)
-            self.set_font('Helvetica', 'B', 7)
-            self.set_text_color(*color)
-            self.cell(bar_w, 5, val_str, align='C')
-            self.set_xy(bx, chart_y + height - 10)
-            self.set_font('Helvetica', '', 7)
-            self.set_text_color(*DARK)
-            self.cell(bar_w, 5, label, align='C')
-
-        self.set_y(chart_y + height + 4)
-
-    def finding_card(self, num, category, title, detail, action, savings,
-                     effort, timeframe, confidence, risk='Low', owner='DevOps Team',
-                     timeline='Week 1', extra_info=None):
-
+        # 왼쪽 컬러 바
         effort_color = GREEN if effort == 'Low' else AMBER if effort == 'Medium' else RED
-        risk_color   = GREEN if risk == 'Low' else AMBER if risk == 'Medium' else RED
+        self.set_fill_color(*effort_color)
+        self.rect(x0, y0, 3, h, 'F')
 
-        if self.get_y() > 230:
-            self.add_page()
+        # 배경
+        self.set_fill_color(250, 250, 255)
+        self.set_draw_color(*BORDER)
+        self.set_line_width(0.2)
+        self.rect(x0 + 3, y0, 175, h, 'FD')
 
-        y_start = self.get_y()
-        cur_y = y_start + 4
+        cur = y0 + 4
 
-        # 카테고리 + 태그
-        self.set_xy(23, cur_y)
+        # 카테고리
+        self.set_xy(22, cur)
         self.set_font('Helvetica', 'B', 7)
         self.set_text_color(*BRAND)
-        self.cell(50, 4, s(f'#{num} - {category.upper()}'))
-        tag_x = 120
-        for tag_text, tag_bg, tag_fg in [
+        self.cell(60, 4, s(f'#{num} - {category.upper()}'))
+
+        # 태그들 (오른쪽)
+        tx = 130
+        for tag, bg, fg in [
             (f'Effort: {effort}', AMBER_L, AMBER),
-            (f'Risk: {risk}', RED_L if risk=="High" else AMBER_L if risk=="Medium" else GREEN_L, risk_color),
-            (f'Owner: {owner[:8]}', PURPLE_BG, BRAND),
+            (f'Risk: {risk}', GREEN_L, GREEN),
         ]:
-            self.set_xy(tag_x, cur_y)
-            self.set_fill_color(*tag_bg)
-            self.set_text_color(*tag_fg)
-            self.set_font('Helvetica', 'B', 6.5)
-            tw = min(len(tag_text) * 2.5 + 6, 42)
-            self.cell(tw, 4, s(tag_text), fill=True, align='C')
-            tag_x += tw + 2
-        cur_y += 6
+            self.set_xy(tx, cur)
+            self.set_fill_color(*bg)
+            self.set_text_color(*fg)
+            self.set_font('Helvetica', 'B', 6)
+            tw = len(tag) * 2.3 + 4
+            self.cell(tw, 4, s(tag), fill=True)
+            tx += tw + 2
+        cur += 5
 
         # 제목
-        self.set_xy(23, cur_y)
+        self.set_xy(22, cur)
         self.set_font('Helvetica', 'B', 10)
         self.set_text_color(*DARK)
-        self.cell(168, 5, truncate(title, 72))
-        cur_y += 7
+        self.cell(172, 5, truncate(title, 70))
+        cur += 6
 
         # Detail
         self.set_font('Helvetica', '', 8)
         self.set_text_color(*GRAY)
-        for line in wrap_text(detail, 82):
-            self.set_xy(23, cur_y)
-            self.cell(168, 5.0, line)
-            cur_y += 5.0
-        cur_y += 3
-
-        # Extra info
-        if extra_info:
-            extra_list = wrap_text(extra_info, 80)
-            extra_h = len(extra_list) * 5.0 + 6
-            self.set_fill_color(236, 253, 245)
-            self.set_draw_color(167, 243, 208)
-            self.set_line_width(0.2)
-            self.rect(23, cur_y, 168, extra_h, 'FD')
-            ly = cur_y + 3
-            self.set_font('Helvetica', 'I', 7.5)
-            self.set_text_color(6, 95, 70)
-            for line in extra_list:
-                self.set_xy(26, ly)
-                self.cell(163, 5.0, line)
-                ly += 5.0
-            cur_y += extra_h + 3
+        for line in detail_list:
+            self.set_xy(22, cur)
+            self.cell(172, 5, line)
+            cur += 5
+        cur += 3
 
         # Recommended Action 라벨
-        self.set_xy(23, cur_y)
+        self.set_xy(22, cur)
         self.set_font('Helvetica', 'B', 8)
         self.set_text_color(*BRAND)
         self.cell(0, 4, 'Recommended Action:')
-        cur_y += 6
+        cur += 5
 
-        # Action 박스 - 최대 12줄
-        action_list = wrap_text(action, 76)
-        if len(action_list) > 12:
-            action_list = action_list[:11] + ['... see full commands in InfraLens dashboard']
-        action_h = len(action_list) * 5.2 + 6
-
-        # 페이지 넘으면 새 페이지
-        if cur_y + action_h + 18 > 272:
-            self.add_page()
-            cur_y = self.get_y()
-
+        # Action 박스
+        ah = len(action_list) * 5.0 + 6
         self.set_fill_color(*PURPLE_BG)
         self.set_draw_color(*PURPLE_BD)
         self.set_line_width(0.2)
-        self.rect(23, cur_y, 168, action_h, 'FD')
-        ly = cur_y + 3
+        self.rect(22, cur, 172, ah, 'FD')
+        ly = cur + 3
         self.set_font('Helvetica', '', 7.5)
         self.set_text_color(*DARK)
         for line in action_list:
-            self.set_xy(26, ly)
-            self.cell(163, 5.2, line)
-            ly += 5.2
-        cur_y += action_h + 4
+            self.set_xy(25, ly)
+            self.cell(166, 5, line)
+            ly += 5
+        cur += ah + 3
 
-        # 하단 절감액 바
+        # 하단 절감액
         self.set_fill_color(236, 253, 245)
-        self.rect(23, cur_y, 168, 12, 'F')
-        self.set_xy(26, cur_y + 2)
-        self.set_font('Helvetica', 'B', 11)
+        self.rect(22, cur, 172, 11, 'F')
+        self.set_xy(25, cur + 2)
+        self.set_font('Helvetica', 'B', 10)
         self.set_text_color(*GREEN)
-        saving_str = f'Save ${savings:,.0f}/mo  (${savings*12:,.0f}/yr)' if savings > 0 else 'Performance improvement'
-        self.cell(80, 7, s(saving_str))
-        self.set_xy(112, cur_y + 2)
-        self.set_font('Helvetica', '', 7.5)
+        sv = f'Save ${savings:,.0f}/mo  (${savings*12:,.0f}/yr)' if savings > 0 else 'Performance improvement'
+        self.cell(90, 6, s(sv))
+        self.set_xy(130, cur + 2)
+        self.set_font('Helvetica', '', 7)
         self.set_text_color(*GRAY)
-        self.cell(20, 4, s(f'Timeline: {timeline}'))
-        self.set_xy(112, cur_y + 6)
-        self.cell(30, 4, s(f'Confidence: {confidence:.0f}%'))
-        self.set_xy(152, cur_y + 4)
-        self.set_font('Helvetica', 'B', 7.5)
-        self.set_text_color(*BRAND)
-        self.cell(35, 4, s(f'Timeframe: {timeframe}'))
-        cur_y += 14
+        self.cell(30, 3, s(f'Timeframe: {timeframe}'))
+        self.set_xy(130, cur + 6)
+        self.cell(30, 3, s(f'Confidence: {confidence:.0f}%'))
+        cur += 11
 
-        # 왼쪽 구분선만 (세로선)
-        card_h = cur_y + 4 - y_start
-        self.set_draw_color(*BRAND)
-        self.set_line_width(1.5)
-        self.line(17.5, y_start, 17.5, y_start + card_h)
+        self.set_y(y0 + h + 2)
 
-        # 하단 구분선
+    def bar_chart_v(self, data, labels, title, width=178, height=45, color=BRAND):
+        self.set_font('Helvetica', 'B', 8)
+        self.set_text_color(*DARK)
+        self.cell(0, 5, s(title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.ln(1)
+        cx = 16
+        cy = self.get_y()
+        mx = max(data) if data and max(data) > 0 else 1
+        n = len(data)
+        bw = (width - 8) / n
+        ba = height - 10
+        self.set_fill_color(*LGRAY)
         self.set_draw_color(*BORDER)
-        self.set_line_width(0.3)
-        self.line(16, y_start + card_h, 194, y_start + card_h)
+        self.set_line_width(0.2)
+        self.rect(cx, cy, width, height, 'FD')
+        for i, (v, lb) in enumerate(zip(data, labels)):
+            bh = (v / mx) * ba
+            bx = cx + 4 + i * bw
+            by = cy + height - 8 - bh
+            self.set_fill_color(*color)
+            self.rect(bx, by, max(bw - 1.5, 1), bh, 'F')
+            self.set_xy(bx, cy + height - 7)
+            self.set_font('Helvetica', '', 4.5)
+            self.set_text_color(*GRAY)
+            self.cell(max(bw - 1.5, 1), 4, str(lb), align='C')
+        self.set_y(cy + height + 3)
 
-        self.set_y(cur_y + 8)
+    def before_after_chart(self, before, after, width=178, height=48):
+        self.set_font('Helvetica', 'B', 8)
+        self.set_text_color(*DARK)
+        self.cell(0, 5, 'Monthly Cost: Before vs After Optimization',
+                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.ln(1)
+        cx = 16
+        cy = self.get_y()
+        mx = before * 1.1
+        ba = height - 14
+        bw = 38
+        self.set_fill_color(*LGRAY)
+        self.set_draw_color(*BORDER)
+        self.set_line_width(0.2)
+        self.rect(cx, cy, width, height, 'FD')
+        savings = before - after
+        for i, (lb, v, c, vs) in enumerate([
+            ('Current Cost',  before,  RED,   f'${before:,.0f}'),
+            ('After Optim.',  after,   GREEN, f'${after:,.0f}'),
+            ('Monthly Saved', savings, BRAND, f'${savings:,.0f}'),
+        ]):
+            bh = (v / mx) * ba
+            bx = cx + 15 + i * 58
+            by = cy + height - 12 - bh
+            self.set_fill_color(*c)
+            self.rect(bx, by, bw, bh, 'F')
+            self.set_xy(bx, by - 6)
+            self.set_font('Helvetica', 'B', 7)
+            self.set_text_color(*c)
+            self.cell(bw, 5, vs, align='C')
+            self.set_xy(bx, cy + height - 10)
+            self.set_font('Helvetica', '', 7)
+            self.set_text_color(*DARK)
+            self.cell(bw, 5, lb, align='C')
+        self.set_y(cy + height + 4)
+
+    def cumulative_chart(self, monthly, width=178, height=45):
+        self.set_font('Helvetica', 'B', 8)
+        self.set_text_color(*DARK)
+        self.cell(0, 5, 'Cumulative Savings Over 12 Months',
+                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.ln(1)
+        cx = 16
+        cy = self.get_y()
+        vals = [monthly * m for m in range(1, 13)]
+        mx = vals[-1]
+        ba = height - 10
+        bw = (width - 8) / 12
+        self.set_fill_color(*LGRAY)
+        self.set_draw_color(*BORDER)
+        self.set_line_width(0.2)
+        self.rect(cx, cy, width, height, 'FD')
+        for i, v in enumerate(vals):
+            bh = (v / mx) * ba
+            bx = cx + 4 + i * bw
+            by = cy + height - 8 - bh
+            r = int(99 + (i / 11) * 50)
+            self.set_fill_color(r, 102, 241)
+            self.rect(bx, by, max(bw - 1.5, 1), bh, 'F')
+        self.set_xy(cx + width - 45, cy + 3)
+        self.set_font('Helvetica', 'B', 7)
+        self.set_text_color(*GREEN)
+        self.cell(40, 5, f'Year 1: ${mx:,.0f}', align='R')
+        self.set_y(cy + height + 3)
+
 
 def generate_pdf(recs, sim, quality, scores_df, df=None, company_name="Your Company"):
     pdf = PDF()
     pdf.set_margins(16, 16, 16)
     pdf.set_auto_page_break(auto=True, margin=18)
 
-    monthly_savings = sim.get('savings_monthly', 0)
-    before          = sim.get('before_monthly', 0)
-    after           = sim.get('after_monthly', 0)
-    savings_pct     = sim.get('savings_pct', 0)
-    annual_savings  = sim.get('savings_annual', 0)
+    ms  = sim.get('savings_monthly', 0)
+    bef = sim.get('before_monthly', 0)
+    aft = sim.get('after_monthly', 0)
+    pct = sim.get('savings_pct', 0)
+    ann = sim.get('savings_annual', 0)
 
-    # ══════════════════════════════════════════
-    # PAGE 1: COVER + EXECUTIVE SUMMARY
-    # ══════════════════════════════════════════
+    # ── PAGE 1: COVER + EXECUTIVE SUMMARY ──
     pdf.add_page()
-
-    # 상단 바
     pdf.set_fill_color(*BRAND)
     pdf.rect(0, 0, 210, 7, 'F')
     pdf.ln(11)
 
-    # 로고
-    pdf.set_font('Helvetica', 'B', 30)
+    pdf.set_font('Helvetica', 'B', 28)
     pdf.set_text_color(*BRAND)
-    pdf.cell(0, 12, 'InfraLens', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.set_font('Helvetica', '', 12)
+    pdf.cell(0, 11, 'InfraLens', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font('Helvetica', '', 11)
     pdf.set_text_color(*GRAY)
     pdf.cell(0, 6, 'AI Infrastructure Cost Optimization Report', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.ln(3)
 
-    # 회사 정보 박스
     pdf.set_fill_color(*LGRAY)
     pdf.set_draw_color(*BORDER)
-    pdf.rect(16, pdf.get_y(), 178, 18, 'FD')
+    pdf.rect(16, pdf.get_y(), 178, 14, 'FD')
     pdf.set_xy(20, pdf.get_y() + 3)
     pdf.set_font('Helvetica', 'B', 9)
     pdf.set_text_color(*DARK)
-    pdf.cell(60, 5, f'Prepared for: {s(company_name)}')
+    pdf.cell(80, 5, f'Prepared for: {s(company_name)}')
     pdf.set_font('Helvetica', '', 8)
     pdf.set_text_color(*GRAY)
     pdf.cell(0, 5, f'Generated: {datetime.now().strftime("%B %d, %Y at %H:%M")}', align='R')
     pdf.set_xy(20, pdf.get_y() + 5)
     pdf.set_font('Helvetica', '', 8)
     pdf.set_text_color(*GRAY)
-    pdf.cell(0, 5, f'Data analyzed: {quality.get("clean_rows", 0):,} rows | {quality.get("devices", "?")} devices | {quality.get("date_range", "N/A")} | {quality.get("tier", "Standard")} tier')
-    pdf.ln(22)
+    pdf.cell(0, 5, f'Data analyzed: {quality.get("clean_rows",0):,} rows | {quality.get("devices","?")} devices | {quality.get("date_range","N/A")}')
+    pdf.ln(20)
 
     pdf.divider(2, 6)
     pdf.h1('Executive Summary')
-
-    # 핵심 요약 문장
     pdf.body(
-        f'{s(company_name)} is currently spending ${before:,.0f}/month on GPU infrastructure. '
-        f'InfraLens identified ${monthly_savings:,.0f}/month ({savings_pct}%) in recoverable waste '
-        f'through our 9-method ensemble analysis. These are not estimates - they are calculated '
-        f'from your actual usage data with 95% confidence. '
-        f'All optimizations are operational changes only: no new hardware, no downtime, no performance impact.'
+        f'{s(company_name)} is currently spending ${bef:,.0f}/month on GPU infrastructure. '
+        f'InfraLens identified ${ms:,.0f}/month ({pct}%) in recoverable waste '
+        f'through our 9-method ensemble analysis. All optimizations are operational '
+        f'changes only: no new hardware, no downtime, no performance impact.'
     )
     pdf.ln(2)
 
-    # 메트릭 카드 4개
-    y0 = pdf.get_y()
-    card_w = 43
-    card_h = 26
-    metrics = [
-        ('Current Monthly Spend', f'${before:,.0f}',          'per month',  GRAY,  LGRAY),
-        ('After Optimization',    f'${after:,.0f}',           'per month',  BLUE,  LGRAY),
-        ('Monthly Savings',       f'${monthly_savings:,.0f}', f'{savings_pct}% reduction', GREEN, (236,253,245)),
-        ('Annual Opportunity',    f'${annual_savings:,.0f}',  'per year',   BRAND, PURPLE_BG),
-    ]
-    for i, (label, value, sub, color, bg) in enumerate(metrics):
-        x = 16 + i * (card_w + 1.3)
-        pdf.metric_card(x, y0, card_w, card_h, label, value, sub, color, bg)
-    pdf.set_y(y0 + card_h + 5)
+    pdf.metric_cards([
+        ('Current Monthly Spend', f'${bef:,.0f}',  GRAY),
+        ('After Optimization',    f'${aft:,.0f}',  BLUE),
+        ('Monthly Savings',       f'${ms:,.0f}',   GREEN),
+        ('Annual Opportunity',    f'${ann:,.0f}',  BRAND),
+    ])
 
-    # 즉시 실행 가능 강조
     pdf.set_fill_color(*GREEN_L)
     pdf.set_draw_color(167, 243, 208)
     pdf.set_line_width(0.3)
-    pdf.rect(16, pdf.get_y(), 178, 10, 'FD')
-    pdf.set_xy(20, pdf.get_y() + 3)
+    pdf.rect(16, pdf.get_y(), 178, 9, 'FD')
+    pdf.set_xy(20, pdf.get_y() + 2)
     pdf.set_font('Helvetica', 'B', 8)
     pdf.set_text_color(*GREEN)
     pdf.cell(0, 4, 'Payback period: IMMEDIATE - Zero capital required. All changes are configuration-level only.')
-    pdf.ln(14)
+    pdf.ln(13)
 
-    # Top 3 즉시 실행 항목
+    # Top 3 actions
     pdf.h2('Top 3 Actions - Start This Week')
-    action_recs = [r for r in recs if r.monthly_savings > 0][:3]
-    for i, rec in enumerate(action_recs):
+    for r in [x for x in recs if x.monthly_savings > 0][:3]:
         y = pdf.get_y()
         pdf.set_fill_color(*LGRAY)
         pdf.set_draw_color(*BORDER)
-        pdf.rect(16, y, 178, 12, 'FD')
+        pdf.rect(16, y, 178, 11, 'FD')
         pdf.set_fill_color(*BRAND)
-        pdf.rect(16, y, 6, 12, 'F')
-        pdf.set_xy(26, y + 2)
+        pdf.rect(16, y, 5, 11, 'F')
+        pdf.set_xy(24, y + 2)
         pdf.set_font('Helvetica', 'B', 8)
         pdf.set_text_color(*DARK)
-        pdf.cell(100, 4, s(rec.title[:55]))
-        pdf.set_xy(26, y + 7)
-        pdf.set_font('Helvetica', '', 7.5)
+        pdf.cell(110, 4, truncate(r.title, 55))
+        pdf.set_xy(24, y + 6)
+        pdf.set_font('Helvetica', '', 7)
         pdf.set_text_color(*GRAY)
-        pdf.cell(80, 4, s(f'Effort: {rec.effort} | Timeframe: {rec.timeframe}'))
-        pdf.set_xy(148, y + 4)
+        pdf.cell(80, 4, s(f'Effort: {r.effort} | {r.timeframe}'))
+        pdf.set_xy(150, y + 3)
         pdf.set_font('Helvetica', 'B', 9)
         pdf.set_text_color(*GREEN)
-        pdf.cell(42, 5, f'${rec.monthly_savings:,.0f}/mo', align='R')
-        pdf.ln(14)
+        pdf.cell(40, 5, f'${r.monthly_savings:,.0f}/mo', align='R')
+        pdf.ln(13)
 
-    # ══════════════════════════════════════════
-    # PAGE 2: FINANCIAL IMPACT
-    # ══════════════════════════════════════════
+    # ── PAGE 2: FINANCIAL IMPACT ──
     pdf.add_page()
     pdf.h1('Financial Impact Analysis')
     pdf.body(
-        f'The following analysis shows the direct financial impact of implementing '
-        f'InfraLens recommendations. All figures are based on your actual usage data '
-        f'and current electricity rates.',
+        'All figures are based on your actual usage data and current electricity rates.',
         GRAY, 8
     )
     pdf.ln(2)
-
-    # Before/After 차트
-    pdf.before_after_chart(before, after)
+    pdf.before_after_chart(bef, aft)
     pdf.ln(2)
-
-    # 누적 절감 차트
-    pdf.cumulative_savings_chart(monthly_savings)
+    pdf.cumulative_chart(ms)
     pdf.ln(3)
 
-    # ROI 분석 테이블
+    # ROI 테이블
     pdf.h2('ROI Analysis')
-    roi_data = [
+    rows = [
         ['Metric', 'Value', 'Notes'],
-        ['Monthly Cost Reduction', f'${monthly_savings:,.0f}', f'{savings_pct}% of current spend'],
-        ['Annual Savings', f'${annual_savings:,.0f}', 'No capital investment required'],
-        ['Implementation Cost', '$0', 'Config changes only, no new hardware'],
+        ['Monthly Cost Reduction', f'${ms:,.0f}', f'{pct}% of current spend'],
+        ['Annual Savings', f'${ann:,.0f}', 'No capital investment required'],
+        ['Implementation Cost', '$0', 'Config changes only'],
         ['ROI', 'Infinite', 'Zero cost, immediate returns'],
-        ['Break-even Period', 'Day 1', 'Savings start immediately upon implementation'],
-        ['3-Year Total Savings', f'${monthly_savings * 36:,.0f}', 'Conservative estimate, no growth assumed'],
+        ['Break-even Period', 'Day 1', 'Savings start immediately'],
+        ['3-Year Total Savings', f'${ms*36:,.0f}', 'Conservative estimate'],
     ]
-
-    col_w = [65, 45, 68]
-    for j, row in enumerate(roi_data):
+    cw = [65, 45, 68]
+    for j, row in enumerate(rows):
         if j == 0:
             pdf.set_fill_color(*BRAND)
             pdf.set_text_color(*WHITE)
@@ -958,7 +486,7 @@ def generate_pdf(recs, sim, quality, scores_df, df=None, company_name="Your Comp
             pdf.set_text_color(*DARK)
             pdf.set_font('Helvetica', '', 8)
         x = 16
-        for k, (cell, w) in enumerate(zip(row, col_w)):
+        for k, (cell, w) in enumerate(zip(row, cw)):
             pdf.set_xy(x, pdf.get_y())
             if j > 0 and k == 1:
                 pdf.set_font('Helvetica', 'B', 8)
@@ -970,139 +498,71 @@ def generate_pdf(recs, sim, quality, scores_df, df=None, company_name="Your Comp
             x += w
         pdf.ln(6.5)
 
-    pdf.ln(4)
-
-    # 업계 벤치마크
-    pdf.h2('Industry Benchmark Comparison')
-    pdf.ln(1)
-
-    benchmark_data = [
-        ['Metric', 'Your Current', 'Industry Average', 'Top Quartile', 'Status'],
-        ['GPU Utilization', f'{100 - float(str(savings_pct).replace("%","")):.0f}%', '45-55%', '70%+', 'Below avg'],
-        ['Cost per GPU/hr', f'${before/max(quality.get("devices",1),1)/720:.3f}', '$2.50-3.50', '<$2.00', 'Review'],
-        ['Idle GPU %', f'{savings_pct}%', '20-30%', '<15%', 'Needs work'],
-        ['PUE Factor', '1.50', '1.40-1.60', '<1.20', 'Average'],
-    ]
-
-    col_w2 = [42, 32, 34, 30, 40]
-    for j, row in enumerate(benchmark_data):
-        if j == 0:
-            pdf.set_fill_color(*BRAND)
-            pdf.set_text_color(*WHITE)
-            pdf.set_font('Helvetica', 'B', 7.5)
-        else:
-            pdf.set_fill_color(*LLGRAY if j % 2 == 0 else WHITE)
-            pdf.set_text_color(*DARK)
-            pdf.set_font('Helvetica', '', 7.5)
-        x = 16
-        for k, (cell, w) in enumerate(zip(row, col_w2)):
-            pdf.set_xy(x, pdf.get_y())
-            if j > 0 and k == 4:
-                c = RED if 'Below' in cell or 'Needs' in cell else AMBER if 'Review' in cell else GREEN
-                pdf.set_text_color(*c)
-                pdf.set_font('Helvetica', 'B', 7.5)
-            pdf.cell(w, 6, s(cell), fill=(j == 0))
-            if j > 0 and k == 4:
-                pdf.set_text_color(*DARK)
-                pdf.set_font('Helvetica', '', 7.5)
-            x += w
-        pdf.ln(6)
-
-    # ══════════════════════════════════════════
-    # PAGE 3+: ACTION PLANS
-    # ══════════════════════════════════════════
+    # ── PAGE 3+: ACTION PLANS ──
     pdf.add_page()
     pdf.h1('Detailed Action Plans')
     pdf.body(
-        'Each action below has been validated by our 9-method ensemble algorithm. '
-        'Actions are sorted by monthly savings impact. Risk levels reflect potential '
-        'operational impact - all Low risk actions can be implemented without change approval.',
+        'Each action validated by our 9-method ensemble. '
+        'Sorted by monthly savings. Low-risk actions require no change approval.',
         GRAY, 8
     )
     pdf.ln(2)
 
-    # 액션별 상세
-    action_meta = [
-        {'risk': 'Low',    'owner': 'DevOps',   'timeline': 'Week 1'},
-        {'risk': 'Low',    'owner': 'DevOps',   'timeline': 'Week 1-2'},
-        {'risk': 'Medium', 'owner': 'Infra',    'timeline': 'Month 1'},
-        {'risk': 'Medium', 'owner': 'Infra',    'timeline': 'Month 1'},
+    meta = [
+        {'risk':'Low',    'owner':'DevOps',   'timeline':'Week 1'},
+        {'risk':'Low',    'owner':'DevOps',   'timeline':'Week 1-2'},
+        {'risk':'Medium', 'owner':'Infra',    'timeline':'Month 1'},
+        {'risk':'Medium', 'owner':'Infra',    'timeline':'Month 1'},
+        {'risk':'Medium', 'owner':'MLOps',    'timeline':'Month 1'},
+        {'risk':'Medium', 'owner':'DevOps',   'timeline':'Month 1'},
     ]
 
-    for i, rec in enumerate([r for r in recs if r.monthly_savings > 0]):
-        meta = action_meta[i] if i < len(action_meta) else {'risk':'Medium','owner':'DevOps','timeline':'Month 1'}
-        extra = None
-        if hasattr(rec, 'detail') and scores_df is not None and len(scores_df) > 0:
-            if 'Idle' in rec.category:
-                worst = scores_df.nsmallest(1, 'efficiency')
-                if len(worst) > 0:
-                    r = worst.iloc[0]
-                    extra = (
-                        f'Data insight: Worst performer is {r["gpu_id"]} with efficiency score '
-                        f'{r["efficiency"]:.0f}/100 (Grade {r["grade"]}), averaging {r["avg_util"]}% '
-                        f'utilization with {r["waste_pct"]}% idle time. '
-                        f'Estimated {int(r["waste_pct"] * 7.2)} idle hours/month.'
-                    )
-
-        pdf.finding_card(
-            num=rec.priority,
-            category=rec.category,
-            title=rec.title,
-            detail=rec.detail,
-            action=rec.action,
-            savings=rec.monthly_savings,
-            effort=rec.effort,
-            timeframe=rec.timeframe,
-            confidence=rec.confidence,
-            risk=meta['risk'],
-            owner=meta['owner'],
-            timeline=meta['timeline'],
-            extra_info=extra,
+    for i, r in enumerate([x for x in recs if x.monthly_savings > 0]):
+        m = meta[i] if i < len(meta) else {'risk':'Medium','owner':'DevOps','timeline':'Month 1'}
+        pdf.action_card(
+            num=r.priority,
+            category=r.category,
+            title=r.title,
+            detail=r.detail,
+            action=r.action,
+            savings=r.monthly_savings,
+            effort=r.effort,
+            timeframe=r.timeframe,
+            confidence=r.confidence,
+            risk=m['risk'],
+            owner=m['owner'],
+            timeline=m['timeline'],
         )
 
-    # ══════════════════════════════════════════
-    # PAGE: GPU TECHNICAL ANALYSIS
-    # ══════════════════════════════════════════
-    pdf.add_page()
-    pdf.h1('GPU Technical Analysis')
-    pdf.body(
-        'Detailed per-GPU efficiency metrics based on 30-day analysis. '
-        'Score = utilization(40%) + consistency(30%) + low-waste(30%). '
-        'Grades below B require immediate scheduling review.',
-        GRAY, 8
-    )
-    pdf.ln(2)
-
+    # ── GPU ANALYSIS ──
     if scores_df is not None and len(scores_df) > 0:
-        # 효율 바 차트
-        gpu_ids = [str(r['gpu_id']) for _, r in scores_df.iterrows()]
-        gpu_scores = [float(r['efficiency']) for _, r in scores_df.iterrows()]
-        grade_colors_map = {'A': GREEN, 'B': BLUE, 'C': AMBER, 'D': RED}
-
-        def gpu_color_fn(val, i):
-            grade = scores_df.iloc[i]['grade'] if i < len(scores_df) else 'C'
-            return grade_colors_map.get(grade, GRAY)
-
-        pdf.bar_chart_v(
-            gpu_scores, gpu_ids,
-            'GPU Efficiency Scores by Device (Green=A, Blue=B, Amber=C, Red=D)',
-            height=48, highlight_fn=gpu_color_fn
+        pdf.add_page()
+        pdf.h1('GPU Technical Analysis')
+        pdf.body(
+            'Per-GPU efficiency score: compute(25%) + memory(20%) + power(20%) + thermal(15%) + consistency(10%) + resource(10%)',
+            GRAY, 8
         )
+        pdf.ln(2)
+
+        score_col = 'total_score' if 'total_score' in scores_df.columns else 'efficiency'
+        gpu_ids = [str(r['gpu_id']) for _, r in scores_df.iterrows()]
+        gpu_scores = [float(r[score_col]) for _, r in scores_df.iterrows()]
+        grade_colors = {'A': GREEN, 'B': BLUE, 'C': AMBER, 'D': RED}
+
+        def gpu_color(val, i):
+            g = scores_df.iloc[i]['grade'] if i < len(scores_df) else 'C'
+            return grade_colors.get(g, GRAY)
+
+        pdf.bar_chart_v(gpu_scores, gpu_ids, 'GPU Efficiency Scores (Green=A, Blue=B, Amber=C, Red=D)',
+                       height=48, color=BRAND)
         pdf.ln(3)
 
-        # GPU 상세 테이블
-        headers = ['GPU ID', 'Score', 'Grade', 'Avg Util%', 'Waste%', 'Idle h/mo', 'Action Required', 'Priority']
-        widths  = [25, 17, 13, 22, 18, 20, 44, 19]
-        action_map = {
-            'A': ('Maintain', GREEN),
-            'B': ('Minor review', BLUE),
-            'C': ('Optimize now', AMBER),
-            'D': ('URGENT', RED),
-        }
-
+        # GPU 테이블
+        headers = ['GPU ID', 'Score', 'Grade', 'Util%', 'Waste%', 'Action']
+        widths  = [35, 20, 18, 20, 20, 65]
         pdf.set_fill_color(*BRAND)
         pdf.set_text_color(*WHITE)
-        pdf.set_font('Helvetica', 'B', 7.5)
+        pdf.set_font('Helvetica', 'B', 8)
         x = 16
         for h, w in zip(headers, widths):
             pdf.set_xy(x, pdf.get_y())
@@ -1110,333 +570,140 @@ def generate_pdf(recs, sim, quality, scores_df, df=None, company_name="Your Comp
             x += w
         pdf.ln(7)
 
+        action_map = {'A':('Maintain',GREEN),'B':('Minor review',BLUE),
+                      'C':('Optimize now',AMBER),'D':('URGENT',RED)}
         for j, (_, row) in enumerate(scores_df.iterrows()):
             grade = row['grade']
-            gc = grade_colors_map.get(grade, GRAY)
-            action_txt, action_color = action_map.get(grade, ('Review', GRAY))
-            idle_h = int(row['waste_pct'] * 7.2)
-            vals = [
-                str(row['gpu_id']),
-                f"{row['efficiency']:.0f}/100",
-                grade,
-                f"{row['avg_util']}%",
-                f"{row['waste_pct']}%",
-                f"~{idle_h}h",
-                action_txt,
-                f"#{j+1}",
-            ]
-            fill = LLGRAY if j % 2 == 0 else WHITE
-            pdf.set_fill_color(*fill)
+            gc = grade_colors.get(grade, GRAY)
+            at, ac = action_map.get(grade, ('Review',GRAY))
+            pdf.set_fill_color(*LLGRAY if j % 2 == 0 else WHITE)
+            vals = [str(row['gpu_id']), f"{row[score_col]:.0f}/100", grade,
+                    f"{row['avg_util']}%", f"{row['waste_pct']}%", at]
             x = 16
             for k, (v, w) in enumerate(zip(vals, widths)):
                 pdf.set_xy(x, pdf.get_y())
                 if k == 2:
                     pdf.set_text_color(*gc)
-                    pdf.set_font('Helvetica', 'B', 7.5)
-                elif k == 6:
-                    pdf.set_text_color(*action_color)
-                    pdf.set_font('Helvetica', 'B', 7.5)
+                    pdf.set_font('Helvetica', 'B', 8)
+                elif k == 5:
+                    pdf.set_text_color(*ac)
+                    pdf.set_font('Helvetica', 'B', 8)
                 else:
                     pdf.set_text_color(*DARK)
-                    pdf.set_font('Helvetica', '', 7.5)
+                    pdf.set_font('Helvetica', '', 8)
                 pdf.cell(w, 6, s(v), fill=True)
                 x += w
             pdf.ln(6)
 
-    # 24h 패턴 차트
-    if df is not None and 'gpu_util' in df.columns and 'hour' in df.columns:
-        import pandas as pd
-        pdf.ln(4)
-        hourly = df.groupby('hour')['gpu_util'].mean()
-        hours = list(range(24))
-        vals = [float(hourly.get(h, 0)) for h in hours]
-
-        def util_color(val, i):
-            if val < 20: return RED
-            elif val > 70: return BRAND
-            else: return GREEN
-
-        pdf.bar_chart_v(
-            vals, hours,
-            'Average GPU Utilization by Hour (Red=Idle<20%, Blue=Peak>70%, Green=Normal)',
-            height=45, highlight_fn=util_color
-        )
-
-    # ══════════════════════════════════════════
-    # PAGE: IMPLEMENTATION ROADMAP
-    # ══════════════════════════════════════════
+    # ── ROADMAP ──
     pdf.add_page()
     pdf.h1('Implementation Roadmap')
-    pdf.body(
-        'Phased implementation plan to maximize savings while minimizing operational risk. '
-        'Low-effort actions deliver immediate ROI; medium-effort actions require planning.',
-        GRAY, 8
-    )
+    pdf.body('Phased plan to maximize savings while minimizing risk.', GRAY, 8)
     pdf.ln(3)
 
     phases = [
-        {
-            'phase': 'Phase 1 - Week 1',
-            'title': 'Quick Wins (Zero Risk)',
-            'color': GREEN,
-            'bg': (236, 253, 245),
-            'actions': [
-                'Enable GPU power-saving mode on idle instances (nvidia-smi command)',
-                'Set up automated alerts for GPU utilization < 15%',
-                'Configure persistence mode on all GPU instances',
-            ],
-            'savings': monthly_savings * 0.4,
-            'effort': '2-4 hours engineering time',
-        },
-        {
-            'phase': 'Phase 2 - Week 2-3',
-            'title': 'Scheduling Optimization',
-            'color': BLUE,
-            'bg': (239, 246, 255),
-            'actions': [
-                'Reschedule batch training jobs to off-peak hours (22:00-06:00)',
-                'Configure Slurm/cron job scheduler for off-peak execution',
-                'Set up workload queuing for non-time-sensitive tasks',
-            ],
-            'savings': monthly_savings * 0.35,
-            'effort': '4-8 hours engineering time',
-        },
-        {
-            'phase': 'Phase 3 - Month 1',
-            'title': 'Infrastructure Right-sizing',
-            'color': AMBER,
-            'bg': (255, 251, 235),
-            'actions': [
-                'Implement auto-scaling policies (Kubernetes HPA or custom)',
-                'Reduce overnight GPU fleet by identified reducible count',
-                'Set up monitoring dashboards for ongoing optimization',
-            ],
-            'savings': monthly_savings * 0.25,
-            'effort': '1-2 days engineering time',
-        },
+        ('Phase 1 - Week 1', 'Quick Wins (Zero Risk)', GREEN, (236,253,245),
+         ['Enable GPU power-saving mode on idle instances',
+          'Set up automated alerts for GPU utilization < 15%',
+          'Configure persistence mode on all GPU instances'],
+         ms * 0.40),
+        ('Phase 2 - Week 2-3', 'Scheduling Optimization', BLUE, (239,246,255),
+         ['Reschedule batch training to off-peak hours (22:00-06:00)',
+          'Configure Slurm/cron scheduler for off-peak execution',
+          'Set up workload queuing for non-time-sensitive tasks'],
+         ms * 0.35),
+        ('Phase 3 - Month 1', 'Infrastructure Right-sizing', AMBER, (255,251,235),
+         ['Implement auto-scaling (Kubernetes HPA or custom)',
+          'Reduce overnight GPU fleet by identified reducible count',
+          'Set up monitoring dashboards for ongoing optimization'],
+         ms * 0.25),
     ]
 
-    cumulative = 0
-    for phase in phases:
-        cumulative += phase['savings']
+    cumul = 0
+    for phase, title, color, bg, actions, sav in phases:
+        cumul += sav
         y0 = pdf.get_y()
-
-        pdf.set_fill_color(*phase['bg'])
-        pdf.set_draw_color(*phase['color'])
+        pdf.set_fill_color(*bg)
+        pdf.set_draw_color(*color)
         pdf.set_line_width(0.5)
-        pdf.rect(16, y0, 178, 48, 'FD')
-
-        pdf.set_fill_color(*phase['color'])
-        pdf.rect(16, y0, 4, 48, 'F')
-
+        pdf.rect(16, y0, 178, 46, 'FD')
+        pdf.set_fill_color(*color)
+        pdf.rect(16, y0, 4, 46, 'F')
         pdf.set_xy(24, y0 + 3)
         pdf.set_font('Helvetica', 'B', 7)
-        pdf.set_text_color(*phase['color'])
-        pdf.cell(80, 4, s(phase['phase']))
-
+        pdf.set_text_color(*color)
+        pdf.cell(80, 4, s(phase))
         pdf.set_xy(24, y0 + 8)
         pdf.set_font('Helvetica', 'B', 10)
         pdf.set_text_color(*DARK)
-        pdf.cell(100, 5, s(phase['title']))
-
-        for k, action in enumerate(phase['actions']):
+        pdf.cell(100, 5, s(title))
+        for k, action in enumerate(actions):
             pdf.set_xy(24, y0 + 15 + k * 7)
             pdf.set_font('Helvetica', '', 7.5)
             pdf.set_text_color(*DARK)
-            pdf.cell(3, 5, '-')
-            pdf.set_xy(28, y0 + 15 + k * 7)
-            pdf.cell(120, 5, s(action))
-
-        pdf.set_xy(148, y0 + 10)
+            pdf.cell(130, 5, s(f'- {action}'))
+        pdf.set_xy(150, y0 + 10)
         pdf.set_font('Helvetica', 'B', 10)
         pdf.set_text_color(*GREEN)
-        pdf.cell(40, 5, f'+${phase["savings"]:,.0f}/mo', align='R')
-
-        pdf.set_xy(148, y0 + 17)
+        pdf.cell(40, 5, f'+${sav:,.0f}/mo', align='R')
+        pdf.set_xy(150, y0 + 17)
         pdf.set_font('Helvetica', '', 7)
         pdf.set_text_color(*GRAY)
-        pdf.cell(40, 4, f'Cumul: ${cumulative:,.0f}/mo', align='R')
+        pdf.cell(40, 4, f'Cumul: ${cumul:,.0f}/mo', align='R')
+        pdf.ln(50)
 
-        pdf.set_xy(24, y0 + 40)
-        pdf.set_font('Helvetica', 'I', 7)
-        pdf.set_text_color(*GRAY)
-        pdf.cell(0, 4, s(f'Est. effort: {phase["effort"]}'))
-
-        pdf.ln(52)
-
-    # KPI 섹션
-    pdf.h2('Success KPIs - How to Measure Impact')
-    pdf.ln(1)
-
-    kpis = [
-        ('GPU Utilization Rate', 'Current baseline', '>65% average', 'Weekly', 'nvidia-smi, DCGM'),
-        ('Idle GPU Hours',       f'~{int(monthly_savings/3.2)}h/mo',    '<50h/mo',       'Daily',  'InfraLens dashboard'),
-        ('Monthly Infra Cost',   f'${before:,.0f}',  f'<${after:,.0f}', 'Monthly',        'Cloud billing console'),
-        ('Peak-hour GPU jobs',   'Current count',    '<30% of total',   'Weekly',         'Job scheduler logs'),
-    ]
-
-    headers_kpi = ['KPI', 'Current', 'Target', 'Review', 'Data Source']
-    widths_kpi  = [42, 30, 30, 22, 54]
-
-    pdf.set_fill_color(*BRAND)
-    pdf.set_text_color(*WHITE)
-    pdf.set_font('Helvetica', 'B', 8)
-    x = 16
-    for h, w in zip(headers_kpi, widths_kpi):
-        pdf.set_xy(x, pdf.get_y())
-        pdf.cell(w, 7, h, fill=True)
-        x += w
-    pdf.ln(7)
-
-    for j, row in enumerate(kpis):
-        fill = LLGRAY if j % 2 == 0 else WHITE
-        pdf.set_fill_color(*fill)
-        x = 16
-        for k, (cell, w) in enumerate(zip(row, widths_kpi)):
-            pdf.set_xy(x, pdf.get_y())
-            pdf.set_font('Helvetica', '' if k != 2 else 'B', 7.5)
-            pdf.set_text_color(*GREEN if k == 2 else DARK)
-            pdf.cell(w, 6, s(cell), fill=True)
-            x += w
-        pdf.ln(6)
-
-    # ══════════════════════════════════════════
-    # PAGE: METHODOLOGY
-    # ══════════════════════════════════════════
+    # ── METHODOLOGY ──
     pdf.add_page()
     pdf.h1('Methodology & Technical Details')
-    pdf.h2('9-Method Ensemble Detection System (95% Confidence)')
+    pdf.h2('9-Method Ensemble Detection (95% Confidence)')
     pdf.body(
-        'InfraLens uses a proprietary ensemble of 9 complementary detection methods. '
-        'Each method captures different anomaly patterns, and the ensemble fusion '
-        'only flags high-confidence issues where multiple methods agree.',
+        'InfraLens uses 9 complementary detection methods. '
+        'The ensemble only flags high-confidence issues where multiple methods agree.',
         DARK, 8
     )
     pdf.ln(2)
 
     methods = [
-        ('1. Rule-based + Z-score',
-         'Establishes hourly baseline per GPU using rolling 24h statistics. '
-         'Flags periods where current utilization is 1.5+ standard deviations below baseline.',
-         'Fast, interpretable baseline'),
-        ('2. Isolation Forest',
-         'Trains a separate anomaly detection model per GPU device. '
-         'Auto-tunes contamination rate based on estimated idle ratio. Uses 200 estimators.',
-         'Handles non-linear patterns'),
-        ('3. DBSCAN + Silhouette',
-         'Density-based clustering with epsilon parameter auto-optimized via Silhouette score '
-         'across eps=[0.5, 0.8, 1.0, 1.2, 1.5, 2.0, 2.5].',
-         'Finds spatial anomaly clusters'),
-        ('4. Prophet Seasonality',
-         'Decomposes time-series into trend + weekly + daily seasonality. '
-         'Anomalies are detected in the residual component after seasonality removal.',
-         'Removes false positives from patterns'),
-        ('5. Mahalanobis Distance',
-         'D2 = (x-mu)T Sigma-1 (x-mu). Accounts for correlations between features '
-         '(util, power, memory). Threshold set at chi-squared 95th percentile.',
-         'Multi-feature correlation aware'),
-        ('6. Shannon Entropy',
-         'H = -SUM p(x) log p(x). Low entropy = predictable waste pattern. '
-         'Identifies hours with consistently low, predictable utilization.',
-         'Pattern predictability scoring'),
-        ('7. PCA Reconstruction',
-         'Reduces dimensionality to explain 95% variance. Anomaly score = '
-         'reconstruction error ||x - PCA(x)||2. High error = structurally anomalous.',
-         'Structural anomaly detection'),
-        ('8. Energy COP',
-         'COP = useful_work / total_energy. Compares actual COP vs 90th percentile ideal. '
-         'Flags periods where COP efficiency < 50% of theoretical maximum.',
-         'Thermodynamic efficiency'),
-        ('9. Ensemble Fusion',
-         'Confidence-weighted combination. Savings and confidence scores are weighted '
-         'by each method\'s individual confidence. Higher agreement = higher final confidence.',
-         'Maximizes precision'),
+        ('1. Rule-based + Z-score', 'Hourly baseline per GPU using rolling 24h stats. Flags periods 1.5+ std below baseline.'),
+        ('2. Isolation Forest', 'GPU-specific anomaly model, auto-tunes contamination rate, 200 estimators.'),
+        ('3. DBSCAN + Silhouette', 'Density clustering with Silhouette-optimized epsilon parameter.'),
+        ('4. Prophet Seasonality', 'Decomposes time-series to isolate true anomalies from seasonal patterns.'),
+        ('5. Mahalanobis Distance', 'D2=(x-mu)T*Sigma-1*(x-mu). Multi-feature correlation aware.'),
+        ('6. Shannon Entropy', 'H=-SUM p(x)log p(x). Low entropy = predictable waste pattern.'),
+        ('7. PCA Reconstruction', 'Anomaly score = reconstruction error after dimensionality reduction.'),
+        ('8. Energy COP', 'COP=useful_work/total_energy. Thermodynamic efficiency ratio.'),
+        ('9. Ensemble Fusion', 'Confidence-weighted combination. High confidence when methods agree.'),
     ]
 
-    for method, desc, benefit in methods:
+    for method, desc in methods:
         y0 = pdf.get_y()
         if y0 > 255:
             pdf.add_page()
-
+        nl = len(wrap_lines(desc, 140)) 
+        rh = nl * 4.5 + 8
         pdf.set_fill_color(*LGRAY)
         pdf.set_draw_color(*BORDER)
         pdf.set_line_width(0.2)
-
-        desc_lines = max(1, len(desc) // 75 + 1)
-        row_h = desc_lines * 4.5 + 10
-
-        pdf.rect(16, pdf.get_y(), 178, row_h, 'FD')
+        pdf.rect(16, pdf.get_y(), 178, rh, 'FD')
         pdf.set_fill_color(*BRAND)
-        pdf.rect(16, pdf.get_y(), 3, row_h, 'F')
-
+        pdf.rect(16, pdf.get_y(), 3, rh, 'F')
         pdf.set_xy(22, pdf.get_y() + 2)
         pdf.set_font('Helvetica', 'B', 8)
         pdf.set_text_color(*BRAND)
         pdf.cell(55, 4, s(method))
-
         pdf.set_xy(22, pdf.get_y() + 4)
         pdf.set_font('Helvetica', '', 7.5)
         pdf.set_text_color(*DARK)
-        pdf.multi_cell(140, 4.2, s(desc))
-
-        # benefit 태그
-        cur_y = pdf.get_y()
-        pdf.set_fill_color(*PURPLE_BG)
-        pdf.set_xy(148, y0 + 2)
-        pdf.set_font('Helvetica', 'I', 6.5)
-        pdf.set_text_color(*BRAND)
-        pdf.multi_cell(42, 4, s(benefit))
-
-        pdf.set_y(y0 + row_h + 2)
-
-    pdf.divider(6, 5)
-
-    pdf.h2('Cost Calculation Model')
-    pdf.ln(1)
-    pdf.set_fill_color(*LGRAY)
-    pdf.rect(16, pdf.get_y(), 178, 32, 'F')
-    pdf.set_xy(20, pdf.get_y() + 2)
-    pdf.set_font('Courier', 'B', 8)
-    pdf.set_text_color(*BRAND)
-    pdf.cell(0, 5, 'Total Monthly Savings = Idle Savings + Peak Shifting + Cooling Reduction')
-    pdf.ln(7)
-    pdf.set_xy(20, pdf.get_y())
-    pdf.set_font('Courier', '', 7.5)
-    pdf.set_text_color(*DARK)
-    pdf.multi_cell(170, 5, s(
-        'Idle Savings    = idle_power_kw x 0.70 x idle_hours x electricity_rate\n'
-        'Peak Savings    = SUM(peak_rate - offpeak_rate) x movable_hours\n'
-        'Cooling Savings = delta_power_kw x (PUE - 1.0) x electricity_rate\n'
-        'Annual Savings  = Monthly Savings x 12'
-    ))
-
-    pdf.ln(4)
-    pdf.h2('Data Quality & Assumptions')
-    assumptions = [
-        ('Idle power reduction', '70% savings when power-saving mode enabled (NVIDIA validated)'),
-        ('TOU pricing', 'Based on selected cloud provider schedule (AWS/GCP/KEPCO)'),
-        ('Cooling overhead', 'PUE factor applied based on datacenter type selection'),
-        ('Confidence interval', '95% - based on ensemble agreement across 9 methods'),
-        ('Data coverage', f'{quality.get("clean_rows", 0):,} rows, {quality.get("devices","?")} devices, {quality.get("date_range","N/A")}'),
-        ('Savings estimate', 'Conservative - actual savings may be higher'),
-    ]
-
-    for assumption, explanation in assumptions:
-        pdf.set_font('Helvetica', 'B', 8)
-        pdf.set_text_color(*DARK)
-        pdf.cell(55, 5.5, s(assumption))
-        pdf.set_font('Helvetica', '', 8)
-        pdf.set_text_color(*GRAY)
-        pdf.cell(0, 5.5, s(explanation), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.multi_cell(170, 4.2, s(desc))
+        pdf.set_y(y0 + rh + 2)
 
     pdf.divider(6, 4)
     pdf.set_font('Helvetica', 'I', 7.5)
     pdf.set_text_color(*GRAY)
     pdf.multi_cell(0, 5, s(
         'This report is confidential and prepared exclusively for the recipient organization. '
-        'All savings figures are conservative estimates based on actual usage data analysis. '
-        'InfraLens does not guarantee specific savings amounts as actual results depend on '
-        'implementation quality and operational changes made by the recipient organization.'
+        'All savings figures are conservative estimates based on actual usage data. '
+        'Actual results depend on implementation quality and operational changes made.'
     ))
 
     return bytes(pdf.output())
@@ -1447,10 +714,10 @@ def generate_billing_pdf(billing, quality, company_name="Your Company"):
     pdf.set_margins(16, 16, 16)
     pdf.set_auto_page_break(auto=True, margin=18)
 
-    monthly_cost    = billing.get('monthly_cost', 0)
-    monthly_savings = billing.get('monthly_savings', 0)
-    after_cost      = monthly_cost - monthly_savings
-    savings_pct     = round(monthly_savings / max(monthly_cost, 1) * 100, 1)
+    mc  = billing.get('monthly_cost', 0)
+    ms  = billing.get('monthly_savings', 0)
+    aft = mc - ms
+    pct = round(ms / max(mc, 1) * 100, 1)
 
     pdf.add_page()
     pdf.set_fill_color(*BRAND)
@@ -1463,11 +730,12 @@ def generate_billing_pdf(billing, quality, company_name="Your Company"):
     pdf.set_font('Helvetica', '', 11)
     pdf.set_text_color(*GRAY)
     pdf.cell(0, 6, 'Cloud Billing Cost Optimization Report', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.ln(3)
 
     pdf.set_fill_color(*LGRAY)
     pdf.set_draw_color(*BORDER)
-    pdf.rect(16, pdf.get_y() + 3, 178, 14, 'FD')
-    pdf.set_xy(20, pdf.get_y() + 6)
+    pdf.rect(16, pdf.get_y(), 178, 14, 'FD')
+    pdf.set_xy(20, pdf.get_y() + 3)
     pdf.set_font('Helvetica', 'B', 9)
     pdf.set_text_color(*DARK)
     pdf.cell(80, 5, f'Prepared for: {s(company_name)}')
@@ -1479,57 +747,39 @@ def generate_billing_pdf(billing, quality, company_name="Your Company"):
     pdf.divider(2, 6)
     pdf.h1('Executive Summary')
     pdf.body(
-        f'{s(company_name)} is currently spending ${monthly_cost:,.0f}/month on cloud infrastructure. '
-        f'InfraLens billing analysis identified ${monthly_savings:,.0f}/month ({savings_pct}%) '
-        f'in optimization opportunities across {quality.get("clean_rows",0):,} billing records. '
-        f'All optimizations are operational changes with no capital investment required.'
+        f'{s(company_name)} is spending ${mc:,.0f}/month on cloud infrastructure. '
+        f'InfraLens identified ${ms:,.0f}/month ({pct}%) in optimization opportunities. '
+        f'All changes require zero capital investment.'
     )
     pdf.ln(2)
 
-    y0 = pdf.get_y()
-    card_w = 43
-    metrics = [
-        ('Current Monthly Spend', f'${monthly_cost:,.0f}',    'per month',            GRAY,  LGRAY),
-        ('After Optimization',    f'${after_cost:,.0f}',      'per month',            BLUE,  LGRAY),
-        ('Monthly Savings',       f'${monthly_savings:,.0f}', f'{savings_pct}% reduction', GREEN, (236,253,245)),
-        ('Annual Opportunity',    f'${monthly_savings*12:,.0f}', 'per year',          BRAND, PURPLE_BG),
-    ]
-    for i, (label, value, sub, color, bg) in enumerate(metrics):
-        pdf.metric_card(16 + i * (card_w + 1.3), y0, card_w, 26, label, value, sub, color, bg)
-    pdf.set_y(y0 + 30)
+    pdf.metric_cards([
+        ('Current Monthly Spend', f'${mc:,.0f}',    GRAY),
+        ('After Optimization',    f'${aft:,.0f}',   BLUE),
+        ('Monthly Savings',       f'${ms:,.0f}',    GREEN),
+        ('Annual Opportunity',    f'${ms*12:,.0f}', BRAND),
+    ])
+    pdf.ln(4)
 
-    pdf.set_fill_color(*GREEN_L)
-    pdf.set_draw_color(167, 243, 208)
-    pdf.rect(16, pdf.get_y(), 178, 10, 'FD')
-    pdf.set_xy(20, pdf.get_y() + 3)
-    pdf.set_font('Helvetica', 'B', 8)
-    pdf.set_text_color(*GREEN)
-    pdf.cell(0, 4, 'Payback period: IMMEDIATE - Zero capital required. All changes are configuration-level only.')
-    pdf.ln(14)
-
-    pdf.before_after_chart(monthly_cost, after_cost)
+    pdf.before_after_chart(mc, aft)
     pdf.ln(2)
-    pdf.cumulative_savings_chart(monthly_savings)
+    pdf.cumulative_chart(ms)
     pdf.ln(3)
 
     pdf.add_page()
     pdf.h1('Action Plans')
-    pdf.body(
-        'Each recommendation validated by InfraLens billing analysis engine. '
-        'Sorted by monthly savings impact.',
-        GRAY, 8
-    )
+    pdf.body('Sorted by monthly savings impact.', GRAY, 8)
     pdf.ln(2)
 
-    action_meta = [
-        {'risk': 'Low',    'owner': 'DevOps',   'timeline': 'Week 1'},
-        {'risk': 'Medium', 'owner': 'Infra',    'timeline': 'Month 1'},
-        {'risk': 'High',   'owner': 'Arch Team','timeline': 'Quarter 1'},
+    meta = [
+        {'risk':'Low',    'owner':'DevOps',    'timeline':'Week 1'},
+        {'risk':'Medium', 'owner':'Infra',     'timeline':'Month 1'},
+        {'risk':'High',   'owner':'Arch Team', 'timeline':'Quarter 1'},
     ]
 
     for i, finding in enumerate(billing.get('findings', [])):
-        meta = action_meta[i] if i < len(action_meta) else {'risk':'Medium','owner':'DevOps','timeline':'Month 1'}
-        pdf.finding_card(
+        m = meta[i] if i < len(meta) else {'risk':'Medium','owner':'DevOps','timeline':'Month 1'}
+        pdf.action_card(
             num=i+1,
             category=finding['type'],
             title=finding['title'],
@@ -1539,72 +789,10 @@ def generate_billing_pdf(billing, quality, company_name="Your Company"):
             effort=finding['effort'],
             timeframe=finding['timeframe'],
             confidence=finding['confidence'],
-            risk=meta['risk'],
-            owner=meta['owner'],
-            timeline=meta['timeline'],
+            risk=m['risk'],
+            owner=m['owner'],
+            timeline=m['timeline'],
         )
-
-    top_resources = billing.get('top_cost_resources', None)
-    if top_resources is not None and len(top_resources) > 0:
-        pdf.add_page()
-        pdf.h1('Top Cost Resources')
-        pdf.body(
-            'Resources ranked by total cost. Focus optimization on top items first '
-            'for maximum ROI. Consider Reserved Instances or Committed Use Discounts '
-            'for consistently high-usage resources.',
-            GRAY, 8
-        )
-        pdf.ln(2)
-
-        # 서비스별 수평 바 차트
-        sb = billing.get('service_breakdown', None)
-        if sb is not None and len(sb) > 0:
-            top_sb = sb.head(8)
-            pdf.bar_chart_h(
-                list(top_sb['cost'].values),
-                list(top_sb['service'].values),
-                'Cost by Service (Top 8)',
-            )
-            pdf.ln(2)
-
-        headers = ['Resource ID', 'Total Cost', '% of Budget', 'Recommendation']
-        widths  = [55, 35, 30, 58]
-        total   = top_resources['total_cost'].sum()
-
-        pdf.set_fill_color(*BRAND)
-        pdf.set_text_color(*WHITE)
-        pdf.set_font('Helvetica', 'B', 8)
-        x = 16
-        for h, w in zip(headers, widths):
-            pdf.set_xy(x, pdf.get_y())
-            pdf.cell(w, 7, h, fill=True)
-            x += w
-        pdf.ln(7)
-
-        for j, (_, row) in enumerate(top_resources.head(15).iterrows()):
-            fill = LLGRAY if j % 2 == 0 else WHITE
-            pdf.set_fill_color(*fill)
-            pct = row['total_cost'] / max(total, 1) * 100
-            rec_txt = 'Review for rightsizing' if pct > 15 else 'Consider Reserved Instance' if pct > 8 else 'Monitor'
-            rec_color = RED if pct > 15 else AMBER if pct > 8 else GREEN
-            vals = [
-                str(row['resource_id']),
-                f"${row['total_cost']:,.2f}",
-                f"{pct:.1f}%",
-                rec_txt,
-            ]
-            x = 16
-            for k, (v, w) in enumerate(zip(vals, widths)):
-                pdf.set_xy(x, pdf.get_y())
-                if k == 3:
-                    pdf.set_text_color(*rec_color)
-                    pdf.set_font('Helvetica', 'B', 7.5)
-                else:
-                    pdf.set_text_color(*DARK)
-                    pdf.set_font('Helvetica', '', 7.5)
-                pdf.cell(w, 6, s(v), fill=True)
-                x += w
-            pdf.ln(6)
 
     pdf.divider(8, 4)
     pdf.set_font('Helvetica', 'I', 7.5)
@@ -1618,22 +806,28 @@ if __name__ == '__main__':
     from data_loader import load_and_prepare
     from cost_model import simulate_before_after
     from analyzer import (detect_idle_maximum, detect_peak_waste_advanced,
-                          detect_overprovision_advanced, compute_efficiency_scores,
-                          engineer_features)
+                          detect_overprovision_advanced, compute_advanced_efficiency_score,
+                          detect_thermal_throttling, detect_memory_bandwidth_bottleneck,
+                          detect_inter_gpu_waste, detect_workload_gap, engineer_features)
     from recommender import generate_recommendations
     import warnings
     warnings.filterwarnings('ignore')
 
-    df, col_map, quality = load_and_prepare('gpu_metrics_30d.csv')
+    df, col_map, quality = load_and_prepare('realistic_gpu_data.csv')
     df = engineer_features(df)
-    idle   = detect_idle_maximum(df)
-    peak   = detect_peak_waste_advanced(df)
-    over   = detect_overprovision_advanced(df)
-    scores = compute_efficiency_scores(df)
-    sim    = simulate_before_after(df)
-    recs   = generate_recommendations(idle, peak, over, sim, scores)
+    idle    = detect_idle_maximum(df)
+    peak    = detect_peak_waste_advanced(df)
+    over    = detect_overprovision_advanced(df)
+    sim     = simulate_before_after(df)
+    scores  = compute_advanced_efficiency_score(df)
+    thermal = detect_thermal_throttling(df)
+    mem_b   = detect_memory_bandwidth_bottleneck(df)
+    inter   = detect_inter_gpu_waste(df)
+    gap     = detect_workload_gap(df)
+    recs    = generate_recommendations(idle, peak, over, sim, scores, df=df,
+                thermal=thermal, mem_bottleneck=mem_b, inter_gpu=inter, workload_gap=gap)
 
     pdf_bytes = generate_pdf(recs, sim, quality, scores, df=df, company_name="Sample Corp")
     with open('infralens_report.pdf', 'wb') as f:
         f.write(pdf_bytes)
-    print(f"Done: {len(pdf_bytes):,} bytes")
+    print(f'Done: {len(pdf_bytes):,} bytes')
