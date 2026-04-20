@@ -38,6 +38,54 @@ def s(text):
             result += mp.get(c, '?')
     return result
 
+def safe_num(val, fmt='${:,.0f}', fallback='N/A'):
+    try:
+        return fmt.format(float(val))
+    except:
+        return fallback
+
+
+def truncate(text, max_chars=85, suffix='...'):
+    text = s(str(text))
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars - len(suffix)] + suffix
+
+
+def wrap_text(text, max_chars=85):
+    """\n 유지하면서 max_chars 기준으로 줄 나누기"""
+    text = s(str(text))
+    result_lines = []
+    # 먼저 \n으로 분리
+    for paragraph in text.split('\n'):
+        paragraph = paragraph.rstrip()
+        if paragraph == '':
+            result_lines.append('')
+            continue
+        # 각 단락을 max_chars로 줄 나누기
+        words = paragraph.split(' ')
+        current = ''
+        for word in words:
+            if not word:
+                current += ' '
+                continue
+            if len(current) + len(word) + (1 if current else 0) <= max_chars:
+                current = current + ' ' + word if current.strip() else word
+            else:
+                if current.strip():
+                    result_lines.append(current)
+                current = word
+        if current.strip():
+            result_lines.append(current)
+        elif not current.strip() and paragraph:
+            result_lines.append('')
+    return result_lines if result_lines else ['']
+
+
+def count_lines(text, max_chars=85):
+    return max(1, len(wrap_text(text, max_chars)))
+
+
 class PDF(FPDF):
     def header(self):
         if self.page_no() == 1:
@@ -264,126 +312,497 @@ class PDF(FPDF):
     def finding_card(self, num, category, title, detail, action, savings,
                      effort, timeframe, confidence, risk='Low', owner='DevOps Team',
                      timeline='Week 1', extra_info=None):
+
         effort_color = GREEN if effort == 'Low' else AMBER if effort == 'Medium' else RED
         risk_color   = GREEN if risk == 'Low' else AMBER if risk == 'Medium' else RED
 
-        detail_lines = max(1, len(s(detail)) // 83 + 1)
-        action_lines = max(1, len(s(action)) // 80 + 1)
-        extra_lines  = max(1, len(s(extra_info)) // 83 + 1) if extra_info else 0
-
-        card_h = 18 + (detail_lines * 4.5) + 10 + (action_lines * 4.5) + 6
-        if extra_info:
-            card_h += extra_lines * 4.5 + 8
-        card_h += 20
-
-        y0 = self.get_y()
-        if y0 + card_h > 270:
+        if self.get_y() > 230:
             self.add_page()
-            y0 = self.get_y()
 
-        # 왼쪽 바
-        self.set_fill_color(*BRAND)
-        self.rect(16, y0, 3.5, card_h, 'F')
+        y_start = self.get_y()
+        x0 = 16
+        w  = 178
+        cur_y = y_start + 4
 
-        # 카드
-        self.set_fill_color(*WHITE)
-        self.set_draw_color(*BORDER)
-        self.set_line_width(0.3)
-        self.rect(19.5, y0, 174.5, card_h, 'FD')
-
-        cur_y = y0 + 4
-
-        # 카테고리 + 태그들
+        # ─ 카테고리 + 태그 ─
         self.set_xy(23, cur_y)
         self.set_font('Helvetica', 'B', 7)
         self.set_text_color(*BRAND)
         self.cell(50, 4, s(f'#{num} - {category.upper()}'))
 
-        # 태그
         tag_x = 120
-        self.set_xy(tag_x, cur_y)
-        self.set_fill_color(*AMBER_L)
-        self.set_text_color(*AMBER)
-        self.set_font('Helvetica', 'B', 6.5)
-        self.cell(22, 4, f'Effort: {effort}', fill=True, align='C')
-        self.set_xy(tag_x + 23, cur_y)
-        self.set_fill_color(*RED_L if risk == 'High' else AMBER_L if risk == 'Medium' else GREEN_L)
-        self.set_text_color(*risk_color)
-        self.cell(20, 4, f'Risk: {risk}', fill=True, align='C')
-        self.set_xy(tag_x + 44, cur_y)
-        self.set_fill_color(*PURPLE_BG)
-        self.set_text_color(*BRAND)
-        self.cell(26, 4, f'Owner: {owner[:8]}', fill=True, align='C')
+        for tag_text, tag_bg, tag_fg in [
+            (f'Effort: {effort}', AMBER_L, AMBER),
+            (f'Risk: {risk}', RED_L if risk=="High" else AMBER_L if risk=="Medium" else GREEN_L, risk_color),
+            (f'Owner: {owner[:8]}', PURPLE_BG, BRAND),
+        ]:
+            self.set_xy(tag_x, cur_y)
+            self.set_fill_color(*tag_bg)
+            self.set_text_color(*tag_fg)
+            self.set_font('Helvetica', 'B', 6.5)
+            tw = min(len(tag_text) * 2.5 + 6, 42)
+            self.cell(tw, 4, s(tag_text), fill=True, align='C')
+            tag_x += tw + 2
         cur_y += 6
 
-        # 타이틀
+        # ─ 제목 ─
         self.set_xy(23, cur_y)
         self.set_font('Helvetica', 'B', 10)
         self.set_text_color(*DARK)
-        self.cell(0, 5, s(title))
+        self.cell(w - 10, 5, truncate(title, 72))
         cur_y += 7
 
-        # Detail
-        self.set_xy(23, cur_y)
+        # ─ Detail ─
         self.set_font('Helvetica', '', 8)
         self.set_text_color(*GRAY)
-        self.multi_cell(168, 4.5, s(detail))
-        cur_y = self.get_y() + 2
+        for line in wrap_text(detail, 82):
+            if cur_y > 268:
+                self.add_page()
+                cur_y = self.get_y()
+            self.set_xy(23, cur_y)
+            self.cell(168, 5.0, line)
+            cur_y += 5.0
+        cur_y += 3
 
-        # Extra info
+        # ─ Extra info ─
         if extra_info:
+            extra_lines_list = wrap_text(extra_info, 80)
+            extra_box_h = len(extra_lines_list) * 5.0 + 6
             self.set_fill_color(236, 253, 245)
             self.set_draw_color(167, 243, 208)
             self.set_line_width(0.2)
-            extra_h = extra_lines * 4.5 + 5
-            self.rect(23, cur_y, 168, extra_h, 'FD')
-            self.set_xy(26, cur_y + 2)
+            self.rect(23, cur_y, 168, extra_box_h, 'FD')
+            line_y = cur_y + 3
             self.set_font('Helvetica', 'I', 7.5)
             self.set_text_color(6, 95, 70)
-            self.multi_cell(163, 4.5, s(extra_info))
-            cur_y += extra_h + 3
+            for line in extra_lines_list:
+                self.set_xy(26, line_y)
+                self.cell(163, 5.0, line)
+                line_y += 5.0
+            cur_y += extra_box_h + 3
 
-        # Recommended Action
+        # ─ Recommended Action 라벨 ─
         self.set_xy(23, cur_y)
         self.set_font('Helvetica', 'B', 8)
         self.set_text_color(*BRAND)
         self.cell(0, 4, 'Recommended Action:')
-        cur_y += 5
+        cur_y += 6
 
-        action_box_h = action_lines * 4.5 + 5
+        # ─ Action 박스: 최대 15줄로 제한 ─
+        action_lines_list = wrap_text(action, 76)
+        if len(action_lines_list) > 15:
+            action_lines_list = action_lines_list[:14] + ['... (see full plan in dashboard)']
+        action_box_h = len(action_lines_list) * 5.2 + 6
+
+        # 페이지 넘으면 새 페이지
+        if cur_y + action_box_h + 20 > 272:
+            self.add_page()
+            cur_y = self.get_y()
+
+        # 박스 그리기
         self.set_fill_color(*PURPLE_BG)
         self.set_draw_color(*PURPLE_BD)
         self.set_line_width(0.2)
         self.rect(23, cur_y, 168, action_box_h, 'FD')
-        self.set_xy(26, cur_y + 2)
-        self.set_font('Helvetica', '', 8)
+
+        # 텍스트 쓰기
+        line_y = cur_y + 3
+        self.set_font('Helvetica', '', 7.5)
         self.set_text_color(*DARK)
-        self.multi_cell(163, 4.5, s(action))
+        for line in action_lines_list:
+            self.set_xy(26, line_y)
+            self.cell(163, 5.2, line)
+            line_y += 5.2
         cur_y += action_box_h + 4
 
-        # 하단: 절감액 + 메타
+        # ─ 하단 절감액 바 ─
         self.set_fill_color(236, 253, 245)
         self.rect(23, cur_y, 168, 12, 'F')
 
         self.set_xy(26, cur_y + 2)
         self.set_font('Helvetica', 'B', 11)
         self.set_text_color(*GREEN)
-        self.cell(80, 7, f'Save ${savings:,.0f}/mo  (${savings*12:,.0f}/yr)')
+        saving_str = f'Save ${savings:,.0f}/mo  (${savings*12:,.0f}/yr)' if savings > 0 else 'Performance improvement'
+        self.cell(80, 7, s(saving_str))
 
         self.set_xy(112, cur_y + 2)
         self.set_font('Helvetica', '', 7.5)
         self.set_text_color(*GRAY)
-        self.cell(20, 4, f'Timeline: {timeline}')
+        self.cell(20, 4, s(f'Timeline: {timeline}'))
         self.set_xy(112, cur_y + 6)
-        self.cell(30, 4, f'Confidence: {confidence:.0f}%')
+        self.cell(30, 4, s(f'Confidence: {confidence:.0f}%'))
 
-        self.set_xy(158, cur_y + 4)
+        self.set_xy(152, cur_y + 4)
         self.set_font('Helvetica', 'B', 7.5)
         self.set_text_color(*BRAND)
-        self.cell(30, 4, f'Timeframe: {timeframe}')
+        self.cell(35, 4, s(f'Timeframe: {timeframe}'))
+        cur_y += 14
 
-        self.set_y(y0 + card_h + 6)
+        # ─ 전체 카드 박스 (뒤에 그리기) ─
+        card_h = cur_y + 4 - y_start
+        self.set_fill_color(*WHITE)
+        self.set_draw_color(*BORDER)
+        self.set_line_width(0.3)
+        # 카드 테두리만 (fill 없이)
+        self.rect(x0 + 3.5, y_start, w - 3.5, card_h, 'D')
+        # 왼쪽 바
+        self.set_fill_color(*BRAND)
+        self.rect(x0, y_start, 3.5, card_h, 'F')
 
+        self.set_y(cur_y + 6)
+
+class PDF(FPDF):
+    def header(self):
+        if self.page_no() == 1:
+            return
+        self.set_fill_color(*BRAND)
+        self.rect(0, 0, 210, 5, 'F')
+        self.set_y(8)
+        self.set_font('Helvetica', 'B', 7)
+        self.set_text_color(*GRAY)
+        self.cell(87, 4, 'InfraLens - AI Infrastructure Cost Optimization Report')
+        self.cell(0, 4, f'Page {self.page_no()}', align='R')
+        self.ln(7)
+
+    def footer(self):
+        self.set_y(-12)
+        self.set_font('Helvetica', '', 7)
+        self.set_text_color(*GRAY)
+        self.cell(0, 4, f'InfraLens - infralens.streamlit.app - Confidential - {datetime.now().strftime("%Y-%m-%d")}', align='C')
+
+    def divider(self, t=6, b=6, color=BORDER):
+        self.ln(t)
+        self.set_draw_color(*color)
+        self.set_line_width(0.3)
+        self.line(16, self.get_y(), 194, self.get_y())
+        self.ln(b)
+
+    def h1(self, text, color=DARK):
+        self.set_font('Helvetica', 'B', 15)
+        self.set_text_color(*color)
+        self.cell(0, 9, s(text), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.ln(1)
+
+    def h2(self, text, color=BRAND):
+        self.set_font('Helvetica', 'B', 9)
+        self.set_text_color(*color)
+        self.cell(0, 6, s(text), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.ln(1)
+
+    def body(self, text, color=DARK, size=9):
+        self.set_font('Helvetica', '', size)
+        self.set_text_color(*color)
+        self.multi_cell(0, 5, s(text))
+        self.ln(1)
+
+    def tag(self, text, bg, fg):
+        self.set_fill_color(*bg)
+        self.set_text_color(*fg)
+        self.set_font('Helvetica', 'B', 7)
+        self.cell(len(text) * 2.8 + 6, 5, s(text), fill=True)
+
+    def metric_card(self, x, y, w, h, label, value, sub, color, bg=LGRAY):
+        self.set_fill_color(*bg)
+        self.set_draw_color(*BORDER)
+        self.set_line_width(0.3)
+        self.rect(x, y, w, h, 'FD')
+        # 상단 컬러 바
+        self.set_fill_color(*color)
+        self.rect(x, y, w, 2, 'F')
+        self.set_xy(x + 3, y + 4)
+        self.set_font('Helvetica', '', 6)
+        self.set_text_color(*GRAY)
+        self.cell(w - 5, 3.5, s(label).upper())
+        self.set_xy(x + 3, y + 9)
+        self.set_font('Helvetica', 'B', 14)
+        self.set_text_color(*color)
+        self.cell(w - 5, 8, s(value))
+        self.set_xy(x + 3, y + 18)
+        self.set_font('Helvetica', '', 6.5)
+        self.set_text_color(*GRAY)
+        self.cell(w - 5, 4, s(sub))
+
+    def bar_chart_h(self, data, labels, title, width=178, bar_h=7, color=BRAND):
+        """수평 바 차트"""
+        if not data:
+            return
+        self.set_font('Helvetica', 'B', 8)
+        self.set_text_color(*DARK)
+        self.cell(0, 5, s(title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.ln(1)
+
+        max_val = max(data) if max(data) > 0 else 1
+        label_w = 45
+        bar_area = width - label_w - 25
+
+        for i, (val, label) in enumerate(zip(data, labels)):
+            y = self.get_y()
+            bar_len = (val / max_val) * bar_area
+
+            # 라벨
+            self.set_xy(16, y)
+            self.set_font('Helvetica', '', 7.5)
+            self.set_text_color(*DARK)
+            self.cell(label_w, bar_h, s(str(label)[:14]))
+
+            # 바
+            self.set_fill_color(*color)
+            self.rect(16 + label_w, y + 1, max(bar_len, 1), bar_h - 2, 'F')
+
+            # 값
+            self.set_xy(16 + label_w + bar_len + 2, y)
+            self.set_font('Helvetica', 'B', 7)
+            self.set_text_color(*GRAY)
+            self.cell(25, bar_h, f'${val:,.0f}')
+
+            self.ln(bar_h + 1)
+        self.ln(2)
+
+    def bar_chart_v(self, data, labels, title, width=178, height=45, highlight_fn=None, color=BRAND):
+        """수직 바 차트"""
+        self.set_font('Helvetica', 'B', 8)
+        self.set_text_color(*DARK)
+        self.cell(0, 5, s(title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.ln(1)
+
+        chart_x = 16
+        chart_y = self.get_y()
+        max_val = max(data) if max(data) > 0 else 1
+        n = len(data)
+        bar_w = (width - 8) / n
+        bar_area_h = height - 10
+
+        self.set_fill_color(*LGRAY)
+        self.set_draw_color(*BORDER)
+        self.set_line_width(0.2)
+        self.rect(chart_x, chart_y, width, height, 'FD')
+
+        for i, (val, label) in enumerate(zip(data, labels)):
+            bar_h_val = (val / max_val) * bar_area_h
+            bx = chart_x + 4 + i * bar_w
+            by = chart_y + height - 8 - bar_h_val
+            bc = highlight_fn(val, i) if highlight_fn else color
+            self.set_fill_color(*bc)
+            self.rect(bx, by, max(bar_w - 1.5, 1), bar_h_val, 'F')
+            self.set_xy(bx, chart_y + height - 7)
+            self.set_font('Helvetica', '', 4.5)
+            self.set_text_color(*GRAY)
+            self.cell(max(bar_w - 1.5, 1), 4, str(label), align='C')
+
+        self.set_y(chart_y + height + 3)
+
+    def cumulative_savings_chart(self, monthly_savings, width=178, height=45):
+        """누적 절감액 차트"""
+        self.set_font('Helvetica', 'B', 8)
+        self.set_text_color(*DARK)
+        self.cell(0, 5, 'Cumulative Savings Over 12 Months', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.ln(1)
+
+        chart_x = 16
+        chart_y = self.get_y()
+        months = list(range(1, 13))
+        vals = [monthly_savings * m for m in months]
+        max_val = vals[-1]
+        bar_area_h = height - 10
+        bar_w = (width - 8) / 12
+
+        self.set_fill_color(*LGRAY)
+        self.set_draw_color(*BORDER)
+        self.set_line_width(0.2)
+        self.rect(chart_x, chart_y, width, height, 'FD')
+
+        for i, (m, val) in enumerate(zip(months, vals)):
+            bar_h_val = (val / max_val) * bar_area_h
+            bx = chart_x + 4 + i * bar_w
+            by = chart_y + height - 8 - bar_h_val
+            # 그라데이션 효과 (색상 점점 진해짐)
+            intensity = int(99 + (i / 11) * 50)
+            self.set_fill_color(intensity, 102, 241)
+            self.rect(bx, by, max(bar_w - 1.5, 1), bar_h_val, 'F')
+            if i % 3 == 0:
+                self.set_xy(bx, chart_y + height - 7)
+                self.set_font('Helvetica', '', 5)
+                self.set_text_color(*GRAY)
+                self.cell(max(bar_w * 3, 1), 4, f'M{m}', align='C')
+
+        # 최종값 표시
+        self.set_xy(chart_x + width - 45, chart_y + 3)
+        self.set_font('Helvetica', 'B', 7)
+        self.set_text_color(*GREEN)
+        self.cell(40, 5, f'Year 1: ${max_val:,.0f}', align='R')
+
+        self.set_y(chart_y + height + 3)
+
+    def before_after_chart(self, before, after, width=178, height=50):
+        self.set_font('Helvetica', 'B', 8)
+        self.set_text_color(*DARK)
+        self.cell(0, 5, 'Monthly Cost: Before vs After Optimization', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.ln(1)
+
+        chart_x = 16
+        chart_y = self.get_y()
+        max_val = before * 1.1
+        bar_area_h = height - 14
+        bar_w = 38
+
+        self.set_fill_color(*LGRAY)
+        self.set_draw_color(*BORDER)
+        self.set_line_width(0.2)
+        self.rect(chart_x, chart_y, width, height, 'FD')
+
+        savings = before - after
+        items = [
+            ('Current Cost',  before,  RED,   f'${before:,.0f}'),
+            ('After Optim.',  after,   GREEN, f'${after:,.0f}'),
+            ('Monthly Saved', savings, BRAND, f'${savings:,.0f}'),
+        ]
+
+        for i, (label, val, color, val_str) in enumerate(items):
+            bar_h_val = (val / max_val) * bar_area_h
+            bx = chart_x + 15 + i * 58
+            by = chart_y + height - 12 - bar_h_val
+            self.set_fill_color(*color)
+            self.rect(bx, by, bar_w, bar_h_val, 'F')
+            self.set_xy(bx, by - 6)
+            self.set_font('Helvetica', 'B', 7)
+            self.set_text_color(*color)
+            self.cell(bar_w, 5, val_str, align='C')
+            self.set_xy(bx, chart_y + height - 10)
+            self.set_font('Helvetica', '', 7)
+            self.set_text_color(*DARK)
+            self.cell(bar_w, 5, label, align='C')
+
+        self.set_y(chart_y + height + 4)
+
+    def finding_card(self, num, category, title, detail, action, savings,
+                     effort, timeframe, confidence, risk='Low', owner='DevOps Team',
+                     timeline='Week 1', extra_info=None):
+
+        effort_color = GREEN if effort == 'Low' else AMBER if effort == 'Medium' else RED
+        risk_color   = GREEN if risk == 'Low' else AMBER if risk == 'Medium' else RED
+
+        if self.get_y() > 230:
+            self.add_page()
+
+        y_start = self.get_y()
+        cur_y = y_start + 4
+
+        # 카테고리 + 태그
+        self.set_xy(23, cur_y)
+        self.set_font('Helvetica', 'B', 7)
+        self.set_text_color(*BRAND)
+        self.cell(50, 4, s(f'#{num} - {category.upper()}'))
+        tag_x = 120
+        for tag_text, tag_bg, tag_fg in [
+            (f'Effort: {effort}', AMBER_L, AMBER),
+            (f'Risk: {risk}', RED_L if risk=="High" else AMBER_L if risk=="Medium" else GREEN_L, risk_color),
+            (f'Owner: {owner[:8]}', PURPLE_BG, BRAND),
+        ]:
+            self.set_xy(tag_x, cur_y)
+            self.set_fill_color(*tag_bg)
+            self.set_text_color(*tag_fg)
+            self.set_font('Helvetica', 'B', 6.5)
+            tw = min(len(tag_text) * 2.5 + 6, 42)
+            self.cell(tw, 4, s(tag_text), fill=True, align='C')
+            tag_x += tw + 2
+        cur_y += 6
+
+        # 제목
+        self.set_xy(23, cur_y)
+        self.set_font('Helvetica', 'B', 10)
+        self.set_text_color(*DARK)
+        self.cell(168, 5, truncate(title, 72))
+        cur_y += 7
+
+        # Detail
+        self.set_font('Helvetica', '', 8)
+        self.set_text_color(*GRAY)
+        for line in wrap_text(detail, 82):
+            self.set_xy(23, cur_y)
+            self.cell(168, 5.0, line)
+            cur_y += 5.0
+        cur_y += 3
+
+        # Extra info
+        if extra_info:
+            extra_list = wrap_text(extra_info, 80)
+            extra_h = len(extra_list) * 5.0 + 6
+            self.set_fill_color(236, 253, 245)
+            self.set_draw_color(167, 243, 208)
+            self.set_line_width(0.2)
+            self.rect(23, cur_y, 168, extra_h, 'FD')
+            ly = cur_y + 3
+            self.set_font('Helvetica', 'I', 7.5)
+            self.set_text_color(6, 95, 70)
+            for line in extra_list:
+                self.set_xy(26, ly)
+                self.cell(163, 5.0, line)
+                ly += 5.0
+            cur_y += extra_h + 3
+
+        # Recommended Action 라벨
+        self.set_xy(23, cur_y)
+        self.set_font('Helvetica', 'B', 8)
+        self.set_text_color(*BRAND)
+        self.cell(0, 4, 'Recommended Action:')
+        cur_y += 6
+
+        # Action 박스 - 최대 12줄
+        action_list = wrap_text(action, 76)
+        if len(action_list) > 12:
+            action_list = action_list[:11] + ['... see full commands in InfraLens dashboard']
+        action_h = len(action_list) * 5.2 + 6
+
+        # 페이지 넘으면 새 페이지
+        if cur_y + action_h + 18 > 272:
+            self.add_page()
+            cur_y = self.get_y()
+
+        self.set_fill_color(*PURPLE_BG)
+        self.set_draw_color(*PURPLE_BD)
+        self.set_line_width(0.2)
+        self.rect(23, cur_y, 168, action_h, 'FD')
+        ly = cur_y + 3
+        self.set_font('Helvetica', '', 7.5)
+        self.set_text_color(*DARK)
+        for line in action_list:
+            self.set_xy(26, ly)
+            self.cell(163, 5.2, line)
+            ly += 5.2
+        cur_y += action_h + 4
+
+        # 하단 절감액 바
+        self.set_fill_color(236, 253, 245)
+        self.rect(23, cur_y, 168, 12, 'F')
+        self.set_xy(26, cur_y + 2)
+        self.set_font('Helvetica', 'B', 11)
+        self.set_text_color(*GREEN)
+        saving_str = f'Save ${savings:,.0f}/mo  (${savings*12:,.0f}/yr)' if savings > 0 else 'Performance improvement'
+        self.cell(80, 7, s(saving_str))
+        self.set_xy(112, cur_y + 2)
+        self.set_font('Helvetica', '', 7.5)
+        self.set_text_color(*GRAY)
+        self.cell(20, 4, s(f'Timeline: {timeline}'))
+        self.set_xy(112, cur_y + 6)
+        self.cell(30, 4, s(f'Confidence: {confidence:.0f}%'))
+        self.set_xy(152, cur_y + 4)
+        self.set_font('Helvetica', 'B', 7.5)
+        self.set_text_color(*BRAND)
+        self.cell(35, 4, s(f'Timeframe: {timeframe}'))
+        cur_y += 14
+
+        # 왼쪽 구분선만 (세로선)
+        card_h = cur_y + 4 - y_start
+        self.set_draw_color(*BRAND)
+        self.set_line_width(1.5)
+        self.line(17.5, y_start, 17.5, y_start + card_h)
+
+        # 하단 구분선
+        self.set_draw_color(*BORDER)
+        self.set_line_width(0.3)
+        self.line(16, y_start + card_h, 194, y_start + card_h)
+
+        self.set_y(cur_y + 8)
 
 def generate_pdf(recs, sim, quality, scores_df, df=None, company_name="Your Company"):
     pdf = PDF()
