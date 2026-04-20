@@ -6,8 +6,11 @@ from data_loader import load_and_prepare
 from data_profiler import profile_dataset, analyze_billing
 from cost_model import simulate_before_after
 from analyzer import (detect_idle_maximum, detect_peak_waste_advanced,
+                      detect_thermal_throttling, detect_memory_bandwidth_bottleneck,
+                      detect_inter_gpu_waste, detect_workload_gap,
+                      compute_advanced_efficiency_score,
                       detect_overprovision_advanced, compute_efficiency_scores)
-from recommender import generate_recommendations, format_report
+from recommender import generate_recommendations
 
 st.set_page_config(page_title="InfraLens", page_icon="⚡", layout="wide")
 
@@ -320,7 +323,6 @@ else:
             <div class="rec-priority">#{rec.priority} · {rec.category}</div>
             <div class="rec-title">{rec.title}</div>
             <div class="rec-detail">{rec.detail}</div>
-            <div class="rec-action">Action: {rec.action}</div>
             <div class="rec-saving">{saving_text}</div>
             <div class="rec-meta">
                 Effort: <span style="color:{effort_color}">{rec.effort}</span> &nbsp;·&nbsp;
@@ -328,6 +330,9 @@ else:
                 Confidence: {rec.confidence:.0f}%
             </div>
         </div>""", unsafe_allow_html=True)
+        import html
+        action_html = html.escape(rec.action).replace('\n', '<br>').replace('  ', '&nbsp;&nbsp;')
+        st.markdown(f'''<div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;margin-top:-8px;margin-bottom:12px;font-family:monospace;font-size:12px;color:#a5b4fc;line-height:1.8;white-space:pre-wrap;">{action_html}</div>''', unsafe_allow_html=True)
 
     from report_pdf import generate_pdf
     import warnings
