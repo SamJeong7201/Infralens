@@ -2,10 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import html as html_lib
-import warnings
-warnings.filterwarnings('ignore')
-
 from data_loader import load_and_prepare
 from data_profiler import profile_dataset, analyze_billing
 from cost_model import simulate_before_after
@@ -13,7 +9,7 @@ from analyzer import (detect_idle_maximum, detect_peak_waste_advanced,
                       detect_thermal_throttling, detect_memory_bandwidth_bottleneck,
                       detect_inter_gpu_waste, detect_workload_gap,
                       compute_advanced_efficiency_score,
-                      detect_overprovision_advanced, engineer_features)
+                      detect_overprovision_advanced, compute_efficiency_scores)
 from recommender import generate_recommendations
 
 st.set_page_config(page_title="InfraLens", page_icon="⚡", layout="wide")
@@ -30,10 +26,11 @@ section[data-testid="stSidebar"] { background: #0f0f1a; border-right: 1px solid 
 .metric-sub { font-size: 11px; color: #4b5563; margin-top: 6px; }
 .green { color: #34d399; } .red { color: #f87171; }
 .amber { color: #fbbf24; } .blue { color: #818cf8; } .white { color: #ffffff; }
-.rec-card { background: #111120; border: 1px solid #1e1e2e; border-radius: 14px; padding: 22px 26px; margin-bottom: 4px; }
+.rec-card { background: #111120; border: 1px solid #1e1e2e; border-radius: 14px; padding: 22px 26px; margin-bottom: 10px; }
 .rec-priority { font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #6366f1; text-transform: uppercase; margin-bottom: 6px; }
 .rec-title { font-size: 16px; font-weight: 600; color: #f9fafb; margin-bottom: 8px; }
 .rec-detail { font-size: 13px; color: #6b7280; margin-bottom: 10px; line-height: 1.6; }
+.rec-action { font-size: 13px; color: #a5b4fc; margin-bottom: 12px; line-height: 1.6; padding: 8px 12px; background: #1a1a2e; border-radius: 8px; border-left: 3px solid #6366f1; }
 .rec-saving { font-size: 20px; font-weight: 700; color: #34d399; }
 .rec-meta { font-size: 11px; color: #4b5563; margin-top: 6px; }
 .section-title { font-size: 12px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; color: #4b5563; margin-bottom: 16px; }
@@ -49,12 +46,6 @@ section[data-testid="stSidebar"] { background: #0f0f1a; border-right: 1px solid 
 </style>
 """, unsafe_allow_html=True)
 
-# ── session_state 초기화 ──
-for key in ['df','col_map','quality','file_id','analysis','pdf_ts','pdf_billing']:
-    if key not in st.session_state:
-        st.session_state[key] = None
-
-# ── 사이드바 ──
 with st.sidebar:
     st.markdown("### ⚡ InfraLens")
     st.caption("AI Infrastructure Cost Optimization")
@@ -69,33 +60,19 @@ with st.sidebar:
     dc_type  = st.selectbox("DC type", ['average', 'modern', 'hyperscale', 'old'], label_visibility="collapsed")
     st.caption("Supports any CSV — AI auto-detects columns & data type")
 
-# ── 데이터 로딩 (파일 바뀔 때만) ──
-if uploaded is not None:
-    file_id = uploaded.name + str(uploaded.size)
-    if st.session_state.file_id != file_id:
-        with st.spinner("AI analyzing your data..."):
-            st.session_state.df, st.session_state.col_map, st.session_state.quality = load_and_prepare(uploaded)
-        st.session_state.file_id = file_id
-        st.session_state.analysis = None
-        st.session_state.pdf_ts = None
-        st.session_state.pdf_billing = None
-    st.sidebar.success(f"{len(st.session_state.df):,} rows loaded")
+df = None
+col_map = {}
+quality = {}
 
+if uploaded:
+    with st.spinner("AI analyzing your data..."):
+        df, col_map, quality = load_and_prepare(uploaded)
+    st.sidebar.success(f"{len(df):,} rows loaded")
 elif use_sample:
-    if st.session_state.file_id != 'sample':
-        with st.spinner("Loading sample data..."):
-            st.session_state.df, st.session_state.col_map, st.session_state.quality = load_and_prepare('gpu_metrics_30d.csv')
-        st.session_state.file_id = 'sample'
-        st.session_state.analysis = None
-        st.session_state.pdf_ts = None
-        st.session_state.pdf_billing = None
+    with st.spinner("Loading sample data..."):
+        df, col_map, quality = load_and_prepare('gpu_metrics_30d.csv')
     st.sidebar.success("Sample data loaded")
 
-df      = st.session_state.df
-col_map = st.session_state.col_map or {}
-quality = st.session_state.quality or {}
-
-# ── 데이터 없으면 랜딩 ──
 if df is None:
     st.markdown("""
     <div style="text-align:center;padding:80px 40px">
@@ -107,26 +84,26 @@ if df is None:
             <div style="font-size:15px;font-weight:600;color:#e5e7eb;margin-bottom:8px">Drop your CSV here</div>
             <div style="font-size:13px;color:#4b5563;line-height:1.8">
                 GPU monitoring data · Cloud billing records<br>
-                nvidia-smi CSV · Any infrastructure CSV
+                Server metrics · Any infrastructure CSV
             </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
     st.stop()
 
-# ── 데이터 타입 감지 ──
-profile   = profile_dataset(df)
+# 데이터 타입 감지
+profile = profile_dataset(df)
 data_type = profile['data_type']
+
 type_label = 'Time-series' if data_type == 'timeseries' else \
              'Billing Records' if data_type == 'billing' else 'Mixed'
 type_class = 'type-timeseries' if data_type == 'timeseries' else 'type-billing'
 
 st.markdown('<div style="height:16px"></div>', unsafe_allow_html=True)
 
-# ══════════════════════════════════════════
-# BILLING 분기
-# ══════════════════════════════════════════
+# ── 분기: 빌링 vs 시계열 ──
 if data_type == 'billing':
+    # ── BILLING 분석 ──
     with st.spinner("Analyzing billing records..."):
         billing = analyze_billing(df, col_map)
 
@@ -143,37 +120,62 @@ if data_type == 'billing':
     st.markdown(f"""
     <div class="exec-box">
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:24px;text-align:center">
-            <div><div class="metric-label">Current Cost</div><div class="metric-value white">${monthly_cost:,.0f}</div><div class="metric-sub">per month</div></div>
-            <div><div class="metric-label">After Optimization</div><div class="metric-value white">${after_cost:,.0f}</div><div class="metric-sub">per month</div></div>
-            <div><div class="metric-label">Monthly Savings</div><div class="metric-value green">${total_savings:,.0f}</div><div class="metric-sub">{round(total_savings/max(monthly_cost,1)*100,1)}% reduction</div></div>
-            <div><div class="metric-label">Annual Savings</div><div class="metric-value green">${total_savings*12:,.0f}</div><div class="metric-sub">per year</div></div>
+            <div>
+                <div class="metric-label">Current Cost</div>
+                <div class="metric-value white">${monthly_cost:,.0f}</div>
+                <div class="metric-sub">per month</div>
+            </div>
+            <div>
+                <div class="metric-label">After Optimization</div>
+                <div class="metric-value white">${after_cost:,.0f}</div>
+                <div class="metric-sub">per month</div>
+            </div>
+            <div>
+                <div class="metric-label">Monthly Savings</div>
+                <div class="metric-value green">${total_savings:,.0f}</div>
+                <div class="metric-sub">{round(total_savings/max(monthly_cost,1)*100,1)}% reduction</div>
+            </div>
+            <div>
+                <div class="metric-label">Annual Savings</div>
+                <div class="metric-value green">${total_savings*12:,.0f}</div>
+                <div class="metric-sub">per year</div>
+            </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
+    # 서비스별 비용 차트
     if len(billing['service_breakdown']) > 0:
         col1, col2 = st.columns([3, 2])
         with col1:
             st.markdown('<div class="section-title">Cost by Service</div>', unsafe_allow_html=True)
             sb = billing['service_breakdown'].head(10)
             fig = px.bar(sb, x='cost', y='service', orientation='h',
-                        color='pct', color_continuous_scale='Reds',
-                        labels={'cost':'Cost ($)','service':'Service','pct':'% of Total'},
+                        color='pct',
+                        color_continuous_scale='Reds',
+                        labels={'cost': 'Cost ($)', 'service': 'Service', 'pct': '% of Total'},
                         template='plotly_dark')
             fig.update_layout(height=300, margin=dict(t=8,b=8,l=0,r=0),
                              paper_bgcolor='#111120', plot_bgcolor='#111120')
             st.plotly_chart(fig, use_container_width=True)
+
         with col2:
             st.markdown('<div class="section-title">Top Cost Resources</div>', unsafe_allow_html=True)
             if len(billing['top_cost_resources']) > 0:
-                st.dataframe(billing['top_cost_resources'].head(8).rename(columns={
-                    'resource_id':'Resource','total_cost':'Cost ($)'}),
-                    hide_index=True, use_container_width=True)
+                st.dataframe(
+                    billing['top_cost_resources'].head(8).rename(columns={
+                        'resource_id': 'Resource', 'total_cost': 'Cost ($)'
+                    }),
+                    hide_index=True, use_container_width=True
+                )
 
+    # 빌링 액션 플랜
     st.markdown('<div style="height:16px"></div>', unsafe_allow_html=True)
     st.markdown('<div class="section-title">Action Plans — Sorted by Impact</div>', unsafe_allow_html=True)
+
     for i, finding in enumerate(billing['findings']):
-        effort_color = '#34d399' if finding['effort']=='Low' else '#fbbf24' if finding['effort']=='Medium' else '#f87171'
+        effort_color = '#34d399' if finding['effort'] == 'Low' else \
+                      '#fbbf24' if finding['effort'] == 'Medium' else '#f87171'
         st.markdown(f"""
         <div class="rec-card">
             <div class="rec-priority">#{i+1} · {finding['type']}</div>
@@ -181,61 +183,48 @@ if data_type == 'billing':
             <div class="rec-detail">{finding['detail']}</div>
             <div class="rec-action">Action: {finding['action']}</div>
             <div class="rec-saving">Save ${finding['monthly_savings']:,.0f} / month</div>
-            <div class="rec-meta">Effort: <span style="color:{effort_color}">{finding['effort']}</span> &nbsp;·&nbsp; Timeframe: {finding['timeframe']} &nbsp;·&nbsp; Confidence: {finding['confidence']:.0f}%</div>
+            <div class="rec-meta">
+                Effort: <span style="color:{effort_color}">{finding['effort']}</span> &nbsp;·&nbsp;
+                Timeframe: {finding['timeframe']} &nbsp;·&nbsp;
+                Confidence: {finding['confidence']:.0f}%
+            </div>
         </div>""", unsafe_allow_html=True)
 
+
+    # PDF 다운로드
+    from report_pdf import generate_pdf
+    import warnings
+    warnings.filterwarnings('ignore')
     st.markdown('<div style="height:16px"></div>', unsafe_allow_html=True)
     company_name_b = st.text_input('Company name (for report)', value='Your Company', key='billing_company')
-    if st.button('Generate PDF Report', use_container_width=True, key='billing_pdf_btn'):
+    if st.button('Generate PDF Report', use_container_width=True, key='billing_pdf'):
         with st.spinner('Generating PDF...'):
+            sim_billing = {
+            'before_monthly': billing.get('monthly_cost', 0),
+            'after_monthly': billing.get('monthly_cost', 0) - billing.get('monthly_savings', 0),
+            'savings_monthly': billing.get('monthly_savings', 0),
+            'savings_pct': round(billing.get('monthly_savings', 0) / max(billing.get('monthly_cost', 1), 1) * 100, 1),
+            'savings_annual': billing.get('monthly_savings', 0) * 12,
+            }
             from report_pdf import generate_billing_pdf
-            st.session_state.pdf_billing = generate_billing_pdf(billing, quality, company_name=company_name_b)
-    if st.session_state.pdf_billing is not None:
+            pdf_bytes = generate_billing_pdf(billing, quality, company_name=company_name_b)
         st.download_button(
-            label='⬇ Download PDF Report',
-            data=st.session_state.pdf_billing,
-            file_name='infralens_billing_report.pdf',
+            label='Download Full Report (.pdf)',
+            data=pdf_bytes,
+            file_name='infralens_report.pdf',
             mime='application/pdf',
             use_container_width=True,
             key='billing_dl'
         )
-
-# ══════════════════════════════════════════
-# TIMESERIES 분기
-# ══════════════════════════════════════════
 else:
-    # 분석 캐싱 — 같은 파일이면 재실행 안 함
-    if st.session_state.analysis is None:
-        with st.spinner("Running advanced GPU analysis..."):
-            df_eng = engineer_features(df)
-            idle    = detect_idle_maximum(df_eng)
-            peak    = detect_peak_waste_advanced(df_eng, schedule)
-            over    = detect_overprovision_advanced(df_eng)
-            sim     = simulate_before_after(df_eng, schedule=schedule, dc_type=dc_type)
-            scores  = compute_advanced_efficiency_score(df_eng)
-            thermal = detect_thermal_throttling(df_eng)
-            mem_b   = detect_memory_bandwidth_bottleneck(df_eng)
-            inter   = detect_inter_gpu_waste(df_eng)
-            gap     = detect_workload_gap(df_eng)
-            recs    = generate_recommendations(
-                idle, peak, over, sim, scores, df=df_eng,
-                thermal=thermal, mem_bottleneck=mem_b,
-                inter_gpu=inter, workload_gap=gap
-            )
-            st.session_state.analysis = {
-                'idle': idle, 'peak': peak, 'over': over,
-                'sim': sim, 'scores': scores, 'recs': recs, 'df_eng': df_eng
-            }
-
-    # 캐시에서 꺼내기
-    A       = st.session_state.analysis
-    idle    = A['idle']
-    peak    = A['peak']
-    over    = A['over']
-    sim     = A['sim']
-    scores  = A['scores']
-    recs    = A['recs']
-    df_eng  = A['df_eng']
+    # ── TIMESERIES 분석 ──
+    with st.spinner("Running advanced analysis..."):
+        idle   = detect_idle_maximum(df)
+        peak   = detect_peak_waste_advanced(df, schedule)
+        over   = detect_overprovision_advanced(df)
+        scores = compute_efficiency_scores(df)
+        sim    = simulate_before_after(df, schedule=schedule, dc_type=dc_type)
+        recs   = generate_recommendations(idle, peak, over, sim, scores)
 
     idle_total = idle['monthly_savings'].sum() if len(idle) > 0 else 0
 
@@ -248,10 +237,26 @@ else:
     st.markdown(f"""
     <div class="exec-box">
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:24px;text-align:center">
-            <div><div class="metric-label">Current Cost</div><div class="metric-value white">${sim['before_monthly']:,.0f}</div><div class="metric-sub">per month</div></div>
-            <div><div class="metric-label">After Optimization</div><div class="metric-value white">${sim['after_monthly']:,.0f}</div><div class="metric-sub">per month</div></div>
-            <div><div class="metric-label">Monthly Savings</div><div class="metric-value green">${sim['savings_monthly']:,.0f}</div><div class="metric-sub">{sim['savings_pct']}% reduction</div></div>
-            <div><div class="metric-label">Annual Savings</div><div class="metric-value green">${sim['savings_annual']:,.0f}</div><div class="metric-sub">per year</div></div>
+            <div>
+                <div class="metric-label">Current Cost</div>
+                <div class="metric-value white">${sim['before_monthly']:,.0f}</div>
+                <div class="metric-sub">per month</div>
+            </div>
+            <div>
+                <div class="metric-label">After Optimization</div>
+                <div class="metric-value white">${sim['after_monthly']:,.0f}</div>
+                <div class="metric-sub">per month</div>
+            </div>
+            <div>
+                <div class="metric-label">Monthly Savings</div>
+                <div class="metric-value green">${sim['savings_monthly']:,.0f}</div>
+                <div class="metric-sub">{sim['savings_pct']}% reduction</div>
+            </div>
+            <div>
+                <div class="metric-label">Annual Savings</div>
+                <div class="metric-value green">${sim['savings_annual']:,.0f}</div>
+                <div class="metric-sub">per year</div>
+            </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -269,8 +274,8 @@ else:
     col1, col2 = st.columns([3, 2])
     with col1:
         st.markdown('<div class="section-title">Utilization — 24h Pattern</div>', unsafe_allow_html=True)
-        if 'gpu_util' in df_eng.columns and 'hour' in df_eng.columns:
-            hourly = df_eng.groupby('hour')['gpu_util'].mean().reset_index()
+        if 'gpu_util' in df.columns and 'hour' in df.columns:
+            hourly = df.groupby('hour')['gpu_util'].mean().reset_index()
             hourly['status'] = hourly['gpu_util'].apply(
                 lambda x: 'Idle Waste' if x < 20 else ('Peak' if x > 70 else 'Normal'))
             fig = px.bar(hourly, x='hour', y='gpu_util', color='status',
@@ -280,6 +285,7 @@ else:
             fig.update_layout(height=260, margin=dict(t=8,b=8,l=0,r=0),
                              paper_bgcolor='#111120', plot_bgcolor='#111120', legend_title_text='')
             st.plotly_chart(fig, use_container_width=True)
+
     with col2:
         st.markdown('<div class="section-title">Before vs After</div>', unsafe_allow_html=True)
         fig2 = go.Figure()
@@ -293,19 +299,16 @@ else:
     if len(scores) > 0:
         st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
         st.markdown('<div class="section-title">GPU Efficiency Scores</div>', unsafe_allow_html=True)
-        score_col = 'total_score' if 'total_score' in scores.columns else 'efficiency'
-        grade_col = 'grade' if 'grade' in scores.columns else 'grade'
         cols = st.columns(min(len(scores), 4))
         for i, (_, row) in enumerate(scores.iterrows()):
             if i >= 4: break
-            grade = row.get('grade','C')
-            grade_class = f"grade-{grade.lower()}"
+            grade_class = f"grade-{row['grade'].lower()}"
             with cols[i % 4]:
                 st.markdown(f"""
                 <div class="metric-card">
-                    <div class="metric-label">{row['gpu_id'].upper()}</div>
-                    <div class="metric-value white">{row[score_col]:.0f}</div>
-                    <div style="margin:6px 0"><span class="grade-badge {grade_class}">Grade {grade}</span></div>
+                    <div class="metric-label">{row['gpu_id']}</div>
+                    <div class="metric-value white">{row['efficiency']:.0f}</div>
+                    <div style="margin:6px 0"><span class="grade-badge {grade_class}">Grade {row['grade']}</span></div>
                     <div class="metric-sub">util {row['avg_util']}% · waste {row['waste_pct']}%</div>
                 </div>""", unsafe_allow_html=True)
 
@@ -313,7 +316,7 @@ else:
     st.markdown('<div class="section-title">Action Plans — Sorted by Impact</div>', unsafe_allow_html=True)
 
     for rec in recs:
-        effort_color = '#34d399' if rec.effort=='Low' else '#fbbf24' if rec.effort=='Medium' else '#f87171'
+        effort_color = '#34d399' if rec.effort == 'Low' else '#fbbf24' if rec.effort == 'Medium' else '#f87171'
         saving_text = f"Save ${rec.monthly_savings:,.0f} / month" if rec.monthly_savings > 0 else "Performance improvement"
         st.markdown(f"""
         <div class="rec-card">
@@ -327,22 +330,23 @@ else:
                 Confidence: {rec.confidence:.0f}%
             </div>
         </div>""", unsafe_allow_html=True)
-        action_html = html_lib.escape(rec.action).replace('\n', '<br>').replace('  ', '&nbsp;&nbsp;')
-        st.markdown(f'<div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;margin-top:-8px;margin-bottom:16px;font-family:monospace;font-size:12px;color:#a5b4fc;line-height:1.8;">{action_html}</div>', unsafe_allow_html=True)
+        import html
+        action_html = html.escape(rec.action).replace('\n', '<br>').replace('  ', '&nbsp;&nbsp;')
+        st.markdown(f'''<div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;margin-top:-8px;margin-bottom:12px;font-family:monospace;font-size:12px;color:#a5b4fc;line-height:1.8;white-space:pre-wrap;">{action_html}</div>''', unsafe_allow_html=True)
 
-    # PDF
-    st.markdown('<div style="height:16px"></div>', unsafe_allow_html=True)
-    company_name = st.text_input('Company name (for report)', value='Your Company', key='ts_company')
+    from report_pdf import generate_pdf
+    from report_pdf import generate_pdf
+    import warnings
+    warnings.filterwarnings('ignore')
+    company_name = st.text_input('Company name (for report)', value='Your Company')
     if st.button('Generate PDF Report', use_container_width=True, key='ts_pdf_btn'):
-        with st.spinner('Generating PDF report...'):
-            from report_pdf import generate_pdf
-            st.session_state.pdf_ts = generate_pdf(
-                recs, sim, quality, scores, df=df_eng, company_name=company_name
-            )
-    if st.session_state.pdf_ts is not None:
+        with st.spinner('Generating PDF...'):
+            pdf_bytes = generate_pdf(recs, sim, quality, scores, df=df, company_name=company_name)
+            st.session_state['pdf_bytes_ts'] = pdf_bytes
+    if st.session_state.get('pdf_bytes_ts'):
         st.download_button(
-            label='⬇ Download PDF Report',
-            data=st.session_state.pdf_ts,
+            label='Download Full Report (.pdf)',
+            data=st.session_state['pdf_bytes_ts'],
             file_name='infralens_report.pdf',
             mime='application/pdf',
             use_container_width=True,
