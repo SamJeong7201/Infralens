@@ -519,7 +519,7 @@ def generate_recommendations(
             monthly_savings=savings,
             annual_savings=savings * 12,
             effort='Medium',
-            confidence=float(min(95, 65 + avg_idle_gpus * 5)),
+            confidence=float(min(75, 55 + avg_idle_gpus * 2)),
             timeframe='This month',
             owner='DevOps / MLOps',
             time_to_implement='4–8 hours',
@@ -587,9 +587,13 @@ def generate_recommendations(
             env = detect_environment(df)
             for r in recs:
                 guide = build_action_guide(r, env, df)
-                # action 필드를 human-readable guide로 교체
                 r.action = format_guide_text(guide)
     except Exception as e:
-        pass  # advisor 실패해도 기존 action 유지
+        pass
 
-    return sorted(recs, key=lambda r: r.monthly_savings, reverse=True)
+    # savings 기준 정렬 후 priority 재부여
+    sorted_recs = sorted(recs, key=lambda r: r.monthly_savings, reverse=True)
+    for i, r in enumerate(sorted_recs, 1):
+        r.priority = i
+
+    return sorted_recs
