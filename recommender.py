@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Optional
+from infrastructure_advisor import detect_environment, build_action_guide, format_guide_text
 
 @dataclass
 class Recommendation:
@@ -579,5 +580,16 @@ def generate_recommendations(
                 kpi=f'All GPUs score > 60/100 within 30 days'
             ))
             priority += 1
+
+    # infrastructure_advisor로 action 교체
+    try:
+        if df is not None:
+            env = detect_environment(df)
+            for r in recs:
+                guide = build_action_guide(r, env, df)
+                # action 필드를 human-readable guide로 교체
+                r.action = format_guide_text(guide)
+    except Exception as e:
+        pass  # advisor 실패해도 기존 action 유지
 
     return sorted(recs, key=lambda r: r.monthly_savings, reverse=True)
