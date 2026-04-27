@@ -53,65 +53,59 @@ def truncate(text, n=75):
     return text if len(text) <= n else text[:n-3] + '...'
 
 
-def compress_for_pdf(action_text, max_lines=25):
-    """
-    PDF용 action 압축
-    SITUATION + BUSINESS IMPACT + Step 1~2 + VERIFY만 유지
-    """
+def compress_for_pdf(action_text, max_lines=20):
+    """PDF용 action 압축 - SITUATION 3줄 + BUSINESS IMPACT 2줄 + Step 1만"""
     lines = action_text.split('\n')
     result = []
-    
     section = None
     step_count = 0
-    
+    situation_count = 0
+    impact_count = 0
+
     for line in lines:
         stripped = line.strip()
-        
-        # 섹션 감지
         if stripped.startswith('SITUATION'):
             section = 'situation'
-            result.append(line)
+            result.append('SITUATION')
         elif stripped.startswith('BUSINESS IMPACT'):
             section = 'impact'
             result.append('')
-            result.append(line)
+            result.append('BUSINESS IMPACT')
         elif stripped.startswith('WHAT TO DO'):
             section = 'what'
             result.append('')
             result.append(line)
-            result.append('-' * 50)
         elif stripped.startswith('Step '):
             step_count += 1
-            if step_count <= 2:  # Step 1, 2만
-                section = 'step'
+            section = 'step'
+            if step_count <= 1:
                 result.append('')
                 result.append(line)
         elif stripped.startswith('HOW TO VERIFY'):
             section = 'verify'
             result.append('')
-            result.append(line)
-        elif stripped.startswith('EXPECTED RESULT'):
-            section = 'expected'
-            result.append('')
-            result.append(line)
-        elif stripped.startswith('RISK'):
-            result.append('')
-            result.append(line)
-            break  # RISK 이후 생략
-        elif stripped.startswith('ENVIRONMENT'):
-            continue  # 생략
+            result.append('HOW TO VERIFY')
+        elif (stripped.startswith('RISK') or stripped.startswith('ROLLBACK')
+              or stripped.startswith('ENVIRONMENT') or stripped.startswith('EXPECTED')):
+            break
         else:
-            # 현재 섹션에 따라 포함 여부 결정
-            if section in ['situation', 'impact', 'what', 'verify', 'expected']:
+            if section == 'situation' and situation_count < 3 and stripped:
                 result.append(line)
-            elif section == 'step' and step_count <= 2:
+                situation_count += 1
+            elif section == 'impact' and impact_count < 2 and stripped:
                 result.append(line)
-            # step 3 이후 생략
-    
-    # 최대 줄 수 제한
+                impact_count += 1
+            elif section == 'what' and stripped:
+                result.append(line)
+            elif section == 'step' and step_count <= 1:
+                result.append(line)
+            elif section == 'verify' and stripped:
+                result.append(line)
+                break
+
     if len(result) > max_lines:
-        result = result[:max_lines-1] + ['  ... (see full plan in InfraLens dashboard)']
-    
+        result = result[:max_lines-1] + ['  ... see full plan in InfraLens dashboard']
+
     return '\n'.join(result)
 
 
@@ -213,136 +207,167 @@ class PDF(FPDF):
                     savings, effort, timeframe, confidence,
                     risk='Low', owner='DevOps', timeline='Week 1'):
         """
-        Action card - 텍스트 먼저 측정 후 그리기
+        auto_page_break 활용 — rect 없음, 텍스트만 씀
+        빈 페이지 없음, 내용 안 잘림
         """
-        # PDF용 압축 버전 사용
-        action_compressed = compress_for_pdf(action, max_lines=20)
-        action_list = wrap_lines(action_compressed, 76)
+        effort_color = GREEN if effort == 'Low' else AMBER if effort == 'Medium' else RED
+
+        # RISK/ROLLBACK 파싱
+        r_lines, rb_lines = [], []
+        mode = None
+        for ln in action.split('\n'):
+            ls = ln.strip()
+            if ls.startswith('RISK'):
+                mode = 'risk'
+                val = ls.replace('RISK','').strip().lstrip('-').strip()
+                if val: r_lines.append(val)
+            elif ls.startswith('ROLLBACK'):
+                mode = 'rollback'
+            elif ls.startswith('ENVIRONMENT'):
+                break
+            elif mode == 'risk' and ls:
+                r_lines.append(ls)
+            elif mode == 'rollback' and ls:
+                rb_lines.append(ls)
+        r_lines  = [l for l in r_lines  if l][:4]
+        rb_lines = [l for l in rb_lines if l][:4]
+
+        # action에서 RISK/ROLLBACK/ENVIRONMENT 제거
+        action_clean_lines = []
+        mode2 = None
+        for ln in action.split('\n'):
+            ls = ln.strip()
+            if ls.startswith('RISK') or ls.startswith('ROLLBACK') or ls.startswith('ENVIRONMENT'):
+                break
+            action_clean_lines.append(ln)
+        action_clean = '\n'.join(action_clean_lines)
+        action_list = wrap_lines(action_clean, 76)
 
         detail_list = wrap_lines(detail, 80)
 
-        # 높이 계산
-        h = 6                              # 상단 여백
-        h += 5                             # 카테고리 태그
-        h += 6                             # 제목
-        h += len(detail_list) * 5.0 + 3   # detail
-        h += 5                             # "Recommended Action:" 라벨
-        h += len(action_list) * 5.0 + 8   # action 박스
-        h += 12                            # 하단 절감액
-        h += 4                             # 하단 여백
-
-        # 페이지 체크
-        if self.get_y() + h > 268:
-            self.add_page()
-
-        y0 = self.get_y()
-        x0 = 16
-
-        # 왼쪽 컬러 바
-        effort_color = GREEN if effort == 'Low' else AMBER if effort == 'Medium' else RED
+        # 왼쪽 구분선 (세로선)
+        x_line = 17
+        y_start = self.get_y()
+        self.set_draw_color(*effort_color)
+        self.set_line_width(2.5)
+        # 선은 나중에 그릴 수 없으므로 배경색으로 표시
         self.set_fill_color(*effort_color)
-        self.rect(x0, y0, 3, h, 'F')
+        self.rect(16, y_start, 3, 4, 'F')  # 상단 마크만
 
-        # 배경
-        self.set_fill_color(250, 250, 255)
-        self.set_draw_color(*BORDER)
-        self.set_line_width(0.2)
-        self.rect(x0 + 3, y0, 175, h, 'FD')
+        # 상단 여백
+        self.ln(4)
 
-        cur = y0 + 4
-
-        # 카테고리
-        self.set_xy(22, cur)
+        # 카테고리 + 태그
+        self.set_x(23)
         self.set_font('Helvetica', 'B', 7)
         self.set_text_color(*BRAND)
         self.cell(60, 4, s(f'#{num} - {category.upper()}'))
-
-        # 태그들 (오른쪽)
         tx = 130
+        y_tag = self.get_y()
         for tag, bg, fg in [
             (f'Effort: {effort}', AMBER_L, AMBER),
             (f'Risk: {risk}', GREEN_L, GREEN),
         ]:
-            self.set_xy(tx, cur)
+            self.set_xy(tx, y_tag)
             self.set_fill_color(*bg)
             self.set_text_color(*fg)
             self.set_font('Helvetica', 'B', 6)
             tw = len(tag) * 2.3 + 4
             self.cell(tw, 4, s(tag), fill=True)
             tx += tw + 2
-        cur += 5
+        self.ln(6)
 
         # 제목
-        self.set_xy(22, cur)
+        self.set_x(23)
         self.set_font('Helvetica', 'B', 10)
         self.set_text_color(*DARK)
-        self.cell(172, 5, truncate(title, 70))
-        cur += 6
+        self.cell(170, 5, truncate(title, 70))
+        self.ln(7)
 
         # Detail
         self.set_font('Helvetica', '', 8)
         self.set_text_color(*GRAY)
         for line in detail_list:
-            self.set_xy(22, cur)
-            self.cell(172, 5, line)
-            cur += 5
-        cur += 3
+            self.set_x(23)
+            self.cell(170, 5, line)
+            self.ln(5)
+        self.ln(3)
 
         # Recommended Action 라벨
-        self.set_xy(22, cur)
+        self.set_x(23)
         self.set_font('Helvetica', 'B', 8)
         self.set_text_color(*BRAND)
         self.cell(0, 4, 'Recommended Action:')
-        cur += 5
+        self.ln(6)
 
-        # Action 박스 - 페이지 넘으면 새 박스 시작
-        self.set_font('Helvetica', '', 7.5)
-        self.set_text_color(*DARK)
-        
-        # 박스를 페이지 단위로 나눠서 그리기
-        remaining = action_list[:]
-        first_box = True
-        
-        while remaining:
-            available_h = 268 - cur
-            max_lines = max(1, int((available_h - 9) / 5.0))
-            chunk = remaining[:max_lines]
-            remaining = remaining[max_lines:]
-            
-            bh = len(chunk) * 5.0 + 6
+        # Action 텍스트 (보라 배경)
+        for line in action_list:
+            self.set_x(23)
             self.set_fill_color(*PURPLE_BG)
-            self.set_draw_color(*PURPLE_BD)
-            self.set_line_width(0.2)
-            self.rect(22, cur, 172, bh, 'FD')
-            
-            ly = cur + 3
-            for line in chunk:
-                self.set_xy(25, ly)
-                self.cell(166, 5, line)
-                ly += 5
-            cur += bh + 3
-            
-            if remaining:
-                self.add_page()
-                cur = self.get_y()
+            self.set_text_color(*DARK)
+            self.set_font('Helvetica', '', 7.5)
+            self.cell(170, 5, line, fill=True)
+            self.ln(5)
+        self.ln(3)
 
-        # 하단 절감액
+        # RISK & ROLLBACK 노란 박스
+        if r_lines or rb_lines:
+            # 제목
+            self.set_x(23)
+            self.set_fill_color(255, 251, 235)
+            self.set_font('Helvetica', 'B', 8)
+            self.set_text_color(*AMBER)
+            self.cell(170, 6, 'RISK & ROLLBACK', fill=True)
+            self.ln(6)
+
+            if r_lines:
+                self.set_x(23)
+                self.set_fill_color(255, 251, 235)
+                self.set_font('Helvetica', 'B', 7)
+                self.set_text_color(*DARK)
+                self.cell(170, 5, 'Risk:', fill=True)
+                self.ln(5)
+                self.set_font('Helvetica', '', 7)
+                for line in r_lines:
+                    self.set_x(25)
+                    self.set_fill_color(255, 251, 235)
+                    self.cell(168, 4.5, s('- ' + line), fill=True)
+                    self.ln(4.5)
+
+            if rb_lines:
+                self.ln(2)
+                self.set_x(23)
+                self.set_fill_color(255, 251, 235)
+                self.set_font('Helvetica', 'B', 7)
+                self.set_text_color(*DARK)
+                self.cell(170, 5, 'Rollback:', fill=True)
+                self.ln(5)
+                self.set_font('Helvetica', '', 7)
+                for line in rb_lines:
+                    self.set_x(25)
+                    self.set_fill_color(255, 251, 235)
+                    self.cell(168, 4.5, s('- ' + line), fill=True)
+                    self.ln(4.5)
+            self.ln(3)
+
+        # 절감액
+        self.set_x(23)
         self.set_fill_color(236, 253, 245)
-        self.rect(22, cur, 172, 11, 'F')
-        self.set_xy(25, cur + 2)
         self.set_font('Helvetica', 'B', 10)
         self.set_text_color(*GREEN)
         sv = f'Save ${savings:,.0f}/mo  (${savings*12:,.0f}/yr)' if savings > 0 else 'Performance improvement'
-        self.cell(90, 6, s(sv))
-        self.set_xy(130, cur + 2)
+        self.cell(100, 8, s(sv), fill=True)
+        self.set_fill_color(236, 253, 245)
         self.set_font('Helvetica', '', 7)
         self.set_text_color(*GRAY)
-        self.cell(30, 3, s(f'Timeframe: {timeframe}'))
-        self.set_xy(130, cur + 6)
-        self.cell(30, 3, s(f'Confidence: {confidence:.0f}%'))
-        cur += 11
+        self.cell(70, 8, s(f'Timeframe: {timeframe}  |  Owner: {owner}'), fill=True)
+        self.ln(12)
 
-        self.set_y(y0 + h + 2)
+        # 구분선
+        self.set_draw_color(*BORDER)
+        self.set_line_width(0.3)
+        self.line(16, self.get_y(), 194, self.get_y())
+        self.ln(6)
 
     def bar_chart_v(self, data, labels, title, width=178, height=45, color=BRAND):
         self.set_font('Helvetica', 'B', 8)
@@ -687,7 +712,7 @@ def generate_pdf(recs, sim, quality, scores_df, df=None, company_name="Your Comp
     pdf.body(
         f'{s(company_name)} is currently spending ${bef:,.0f}/month on GPU infrastructure. '
         f'InfraLens identified ${ms:,.0f}/month ({pct}%) in recoverable waste '
-        f'through our 9-method ensemble analysis. All optimizations are operational '
+        f'through analysis of your actual GPU usage patterns. All optimizations are operational '
         f'changes only: no new hardware, no downtime, no performance impact.'
     )
     pdf.ln(2)
@@ -863,10 +888,81 @@ def generate_pdf(recs, sim, quality, scores_df, df=None, company_name="Your Comp
     pdf.add_page()
     pdf.h1('Detailed Action Plans')
     pdf.body(
-        'Each action validated by our 9-method ensemble. '
+        'Each action is based on observed patterns in your infrastructure data. '
         'Sorted by monthly savings. Low-risk actions require no change approval.',
         GRAY, 8
     )
+    pdf.ln(2)
+
+    # Workload Assumptions 박스
+    if df is not None and 'gpu_util' in df.columns:
+        # 실제 데이터에서 workload 분류
+        total_rows = len(df)
+        idle_rows    = len(df[df['gpu_util'] < 15])
+        active_rows  = len(df[df['gpu_util'] >= 15])
+        training_rows = len(df[df['gpu_util'] >= 60]) if 'gpu_util' in df.columns else 0
+        inference_rows = active_rows - training_rows
+
+        idle_pct      = round(idle_rows / max(total_rows, 1) * 100)
+        training_pct  = round(training_rows / max(total_rows, 1) * 100)
+        inference_pct = round(inference_rows / max(total_rows, 1) * 100)
+
+        # job_type 컬럼 있으면 더 정확하게
+        if 'job_type' in df.columns:
+            jt = df['job_type'].value_counts(normalize=True) * 100
+            training_pct  = round(jt.get('training', training_pct))
+            inference_pct = round(jt.get('inference', inference_pct))
+            idle_pct      = round(jt.get('idle', idle_pct))
+
+        # overnight idle 시간
+        if 'hour' in df.columns:
+            night = df[df['hour'].isin(list(range(0,8)) + list(range(22,24)))]
+            night_idle_pct = round(len(night[night['gpu_util'] < 15]) / max(len(night), 1) * 100)
+        else:
+            night_idle_pct = idle_pct
+
+        y0 = pdf.get_y()
+        box_h = 38
+
+        # 박스 배경
+        pdf.set_fill_color(239, 246, 255)
+        pdf.set_draw_color(37, 99, 235)
+        pdf.set_line_width(0.5)
+        pdf.rect(16, y0, 178, box_h, 'FD')
+
+        # 왼쪽 바
+        pdf.set_fill_color(37, 99, 235)
+        pdf.rect(16, y0, 3, box_h, 'F')
+
+        # 제목
+        pdf.set_xy(22, y0 + 3)
+        pdf.set_font('Helvetica', 'B', 8)
+        pdf.set_text_color(37, 99, 235)
+        pdf.cell(0, 4, 'INFERRED WORKLOAD CHARACTERISTICS')
+
+        # 내용
+        pdf.set_xy(22, y0 + 9)
+        pdf.set_font('Helvetica', '', 7.5)
+        pdf.set_text_color(*DARK)
+        pdf.cell(0, 4, s(f'Based on {quality.get("clean_rows",0):,} rows of your actual usage data:'))
+
+        pdf.set_xy(22, y0 + 15)
+        pdf.set_font('Helvetica', 'B', 7.5)
+        pdf.set_text_color(*DARK)
+        pdf.cell(50, 4, s(f'Training / Batch:  {training_pct}%'))
+        pdf.cell(50, 4, s(f'Inference:  {inference_pct}%'))
+        pdf.cell(50, 4, s(f'Idle / Unscheduled:  {idle_pct}%'))
+
+        pdf.set_xy(22, y0 + 22)
+        pdf.set_font('Helvetica', 'I', 7)
+        pdf.set_text_color(*GRAY)
+        pdf.multi_cell(170, 4, s(
+            f'Overnight hours (22:00-08:00): {night_idle_pct}% of GPU time is idle. '
+            f'Scale-down recommendations apply to batch workloads only. '
+            f'Real-time inference is excluded from all overnight scale-down actions.'
+        ))
+
+        pdf.set_y(y0 + box_h + 4)
     pdf.ln(2)
 
     meta = [
@@ -1019,7 +1115,7 @@ def generate_pdf(recs, sim, quality, scores_df, df=None, company_name="Your Comp
     pdf.h2('9-Method Ensemble Detection (95% Confidence)')
     pdf.body(
         'InfraLens uses 9 complementary detection methods. '
-        'The ensemble only flags high-confidence issues where multiple methods agree.',
+        'We cross-validate findings across 9 independent methods. Only patterns confirmed by multiple methods are reported.',
         DARK, 8
     )
     pdf.ln(2)

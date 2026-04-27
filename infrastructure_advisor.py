@@ -1076,9 +1076,64 @@ def format_guide_text(guide: ActionGuide) -> str:
     lines.append('')
 
     lines.append(f'RISK  {guide.risk}')
-    lines.append(f'ENVIRONMENT DETECTED  {guide.env.provider.upper()} / {guide.env.orchestration} / {guide.env.gpu_model}')
+
+    # Rollback 추가
+    rollback = _get_rollback(guide)
+    if rollback:
+        lines.append('')
+        lines.append('ROLLBACK (if something goes wrong)')
+        lines.append(rollback)
+
+    lines.append(f'ENVIRONMENT  {guide.env.provider.upper()} / {guide.env.gpu_model}')
 
     return '\n'.join(lines)
+
+
+def _get_rollback(guide: ActionGuide) -> str:
+    category = guide.env.provider
+    action_lower = guide.what_to_do.lower()
+
+    if 'power' in action_lower or 'idle' in action_lower:
+        return (
+            "Restore full power immediately:\n"
+            "  nvidia-smi -i <GPU_INDEX> -pl <ORIGINAL_TDP>\n"
+            "  # A100: -pl 400  |  V100: -pl 300  |  H100: -pl 700\n"
+            "  crontab -r  # Remove scheduled power limits"
+        )
+    elif 'scale' in action_lower or 'fleet' in action_lower:
+        if guide.env.provider == 'aws':
+            return (
+                "Restore full fleet immediately:\n"
+                "  aws autoscaling set-desired-capacity \\\n"
+                "    --auto-scaling-group-name <YOUR_ASG_NAME> \\\n"
+                "    --desired-capacity <ORIGINAL_COUNT>\n"
+                "  # Takes ~2 minutes for instances to start"
+            )
+        else:
+            return (
+                "Restore full fleet:\n"
+                "  kubectl scale deployment <GPU_DEPLOYMENT> --replicas=<ORIGINAL_COUNT>\n"
+                "  # Or manually restart stopped instances"
+            )
+    elif 'mig' in action_lower or 'consolidat' in action_lower:
+        return (
+            "Disable MIG mode (requires reboot):\n"
+            "  sudo nvidia-smi -i <GPU_INDEX> -mig 0\n"
+            "  sudo reboot\n"
+            "  # All workloads resume on full GPU after reboot"
+        )
+    elif 'schedule' in action_lower or 'training' in action_lower:
+        return (
+            "Revert training schedule:\n"
+            "  crontab -e  # Remove the off-peak training entry\n"
+            "  # Or simply restart training manually at any time"
+        )
+    else:
+        return (
+            "Revert changes:\n"
+            "  crontab -r  # Remove any scheduled tasks\n"
+            "  # Restart affected services if needed"
+        )
 
 
 if __name__ == '__main__':

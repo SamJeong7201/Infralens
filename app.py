@@ -18,6 +18,12 @@ from recommender import generate_recommendations
 
 st.set_page_config(page_title="InfraLens", page_icon="⚡", layout="wide")
 
+# session_state 초기화
+for key in ['df','col_map','quality','file_id','analysis','pdf_ts','pdf_billing',
+            'pdf_lab','lab_analysis','lab_recs','version']:
+    if key not in st.session_state:
+        st.session_state[key] = None
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -59,14 +65,41 @@ with st.sidebar:
     st.markdown("### ⚡ InfraLens")
     st.caption("AI Infrastructure Cost Optimization")
     st.divider()
+
+    # 버전 선택
+    st.markdown("**Select Mode**")
+    version = st.radio(
+        "mode",
+        ["🏢  Business", "🔬  Research Lab"],
+        label_visibility="collapsed",
+        key="version_radio"
+    )
+    st.session_state.version = "business" if "Business" in version else "lab"
+    st.divider()
+
     st.markdown("**Upload CSV**")
-    uploaded = st.file_uploader("GPU / server / billing CSV", type="csv", label_visibility="collapsed")
+    if st.session_state.version == "lab":
+        st.caption("GPU metrics CSV + optional Slurm jobs CSV")
+        uploaded = st.file_uploader("GPU metrics CSV", type="csv", label_visibility="collapsed", key="upload_main")
+        uploaded_jobs = st.file_uploader("Slurm jobs CSV (optional)", type="csv", label_visibility="collapsed", key="upload_jobs")
+    else:
+        uploaded = st.file_uploader("GPU / server / billing CSV", type="csv", label_visibility="collapsed", key="upload_main")
+        uploaded_jobs = None
+
     st.markdown("**Or use sample**")
     use_sample = st.button("Run with sample data", use_container_width=True)
     st.divider()
-    st.markdown("**Settings**")
-    schedule = st.selectbox("Cloud pricing", ['aws_us_east', 'gcp_us_central', 'kepco_korea'], label_visibility="collapsed")
-    dc_type  = st.selectbox("DC type", ['average', 'modern', 'hyperscale', 'old'], label_visibility="collapsed")
+
+    if st.session_state.version == "business":
+        st.markdown("**Settings**")
+        schedule = st.selectbox("Cloud pricing", ['aws_us_east', 'gcp_us_central', 'kepco_korea'], label_visibility="collapsed")
+        dc_type  = st.selectbox("DC type", ['average', 'modern', 'hyperscale', 'old'], label_visibility="collapsed")
+    else:
+        schedule = 'aws_us_east'
+        dc_type  = 'average'
+        st.markdown("**Lab Settings**")
+        lab_name = st.text_input("Lab name", value="Your Lab", label_visibility="collapsed")
+
     st.caption("Supports any CSV — AI auto-detects columns & data type")
 
 # ── 데이터 로딩 (파일 바뀔 때만) ──
@@ -79,16 +112,46 @@ if uploaded is not None:
         st.session_state.analysis = None
         st.session_state.pdf_ts = None
         st.session_state.pdf_billing = None
+        st.session_state.lab_analysis = None
+        st.session_state.lab_recs = None
+        st.session_state.pdf_lab = None
     st.sidebar.success(f"{len(st.session_state.df):,} rows loaded")
 
+    # Slurm jobs CSV (Lab 모드)
+    if uploaded_jobs is not None:
+        jobs_id = uploaded_jobs.name + str(uploaded_jobs.size)
+        if st.session_state.get('jobs_file_id') != jobs_id:
+            st.session_state.jobs_df = pd.read_csv(uploaded_jobs)
+            st.session_state.jobs_file_id = jobs_id
+            st.session_state.lab_analysis = None
+    elif 'jobs_df' not in st.session_state:
+        st.session_state.jobs_df = None
+
 elif use_sample:
-    if st.session_state.file_id != 'sample':
+    sample_file = 'lab_gpu_metrics.csv' if st.session_state.version == 'lab' else 'gpu_metrics_30d.csv'
+    sample_id   = f'sample_{st.session_state.version}'
+    if st.session_state.file_id != sample_id:
         with st.spinner("Loading sample data..."):
-            st.session_state.df, st.session_state.col_map, st.session_state.quality = load_and_prepare('gpu_metrics_30d.csv')
-        st.session_state.file_id = 'sample'
+            if st.session_state.version == 'lab':
+                st.session_state.df = pd.read_csv('lab_gpu_metrics.csv')
+                st.session_state.col_map = {}
+                st.session_state.quality = {
+                    'clean_rows': len(st.session_state.df),
+                    'devices': st.session_state.df['gpu_id'].nunique() if 'gpu_id' in st.session_state.df.columns else '?',
+                    'date_range': 'Sample data',
+                    'tier': 'A'
+                }
+                st.session_state.jobs_df = pd.read_csv('lab_slurm_jobs.csv')
+            else:
+                st.session_state.df, st.session_state.col_map, st.session_state.quality = load_and_prepare('gpu_metrics_30d.csv')
+                st.session_state.jobs_df = None
+        st.session_state.file_id = sample_id
         st.session_state.analysis = None
+        st.session_state.lab_analysis = None
+        st.session_state.lab_recs = None
         st.session_state.pdf_ts = None
         st.session_state.pdf_billing = None
+        st.session_state.pdf_lab = None
     st.sidebar.success("Sample data loaded")
 
 df      = st.session_state.df
@@ -113,6 +176,167 @@ if df is None:
     </div>
     """, unsafe_allow_html=True)
     st.stop()
+
+# ══════════════════════════════════════════
+# LAB 버전 분기
+# ══════════════════════════════════════════
+if st.session_state.version == 'lab':
+    from lab_analyzer import run_lab_analysis
+    from lab_recommender import generate_lab_recommendations
+    from lab_report_pdf import generate_lab_pdf
+
+    jobs_df = st.session_state.get('jobs_df', None)
+    _lab_name = st.session_state.get('lab_name', 'Your Lab') if 'lab_name' in dir() else 'Your Lab'
+
+    # 분석 캐싱
+    if st.session_state.lab_analysis is None:
+        with st.spinner("Running lab analysis..."):
+            st.session_state.lab_analysis = run_lab_analysis(df, jobs_df)
+            st.session_state.lab_recs = generate_lab_recommendations(st.session_state.lab_analysis)
+
+    analysis = st.session_state.lab_analysis
+    recs     = st.session_state.lab_recs
+    cu = analysis.get('cluster_util', {})
+    pt = analysis.get('power_thermal', {})
+    uf = analysis.get('user_fairness', {})
+    qb = analysis.get('queue_bottleneck', {})
+
+    # ── Lab UI ──
+    st.markdown(f"""
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+        <div style="font-size:11px;font-weight:600;letter-spacing:3px;color:#2563eb">
+            RESEARCH LAB EDITION
+        </div>
+        <div style="background:#1e3a5f;color:#60a5fa;font-size:11px;font-weight:700;
+                    padding:2px 10px;border-radius:20px">
+            🔬 Lab Mode
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Executive metrics
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(f'<div class="metric-card"><div class="metric-label">Cluster Utilization</div><div class="metric-value {"green" if cu.get("overall_util",0)>60 else "amber" if cu.get("overall_util",0)>40 else "red"}">{cu.get("overall_util",0):.0f}%</div><div class="metric-sub">overall average</div></div>', unsafe_allow_html=True)
+    with c2:
+        st.markdown(f'<div class="metric-card"><div class="metric-label">Idle GPU Time</div><div class="metric-value red">{cu.get("idle_util_pct",0):.0f}%</div><div class="metric-sub">recoverable capacity</div></div>', unsafe_allow_html=True)
+    with c3:
+        avg_wait = qb.get("avg_wait", 0)
+        st.markdown(f'<div class="metric-card"><div class="metric-label">Avg Queue Wait</div><div class="metric-value {"red" if avg_wait>60 else "amber"}">{avg_wait:.0f} min</div><div class="metric-sub">job wait time</div></div>', unsafe_allow_html=True)
+    with c4:
+        st.markdown(f'<div class="metric-card"><div class="metric-label">Monthly Elec. Cost</div><div class="metric-value white">${pt.get("monthly_elec_cost",0):,.0f}</div><div class="metric-sub">estimated</div></div>', unsafe_allow_html=True)
+
+    st.markdown('<div style="height:20px"></div>', unsafe_allow_html=True)
+
+    # 시각화
+    col1, col2 = st.columns([3, 2])
+    with col1:
+        st.markdown('<div class="section-title">Utilization — 24h Pattern</div>', unsafe_allow_html=True)
+        if 'hour' in df.columns and 'gpu_util' in df.columns:
+            hourly = df.groupby('hour')['gpu_util'].mean().reset_index()
+            hourly['status'] = hourly['gpu_util'].apply(
+                lambda x: 'Idle (<15%)' if x < 15 else ('Peak (>70%)' if x > 70 else 'Normal'))
+            fig = px.bar(hourly, x='hour', y='gpu_util', color='status',
+                        color_discrete_map={'Idle (<15%)':'#f87171','Peak (>70%)':'#818cf8','Normal':'#34d399'},
+                        labels={'hour':'Hour','gpu_util':'Avg Util (%)'},
+                        template='plotly_dark')
+            fig.add_hline(y=15, line_dash="dash", line_color="red", opacity=0.5,
+                         annotation_text="idle threshold")
+            fig.update_layout(height=260, margin=dict(t=8,b=8,l=0,r=0),
+                             paper_bgcolor='#111120', plot_bgcolor='#111120', legend_title_text='')
+            st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        st.markdown('<div class="section-title">Weekday vs Weekend</div>', unsafe_allow_html=True)
+        fig2 = go.Figure()
+        fig2.add_bar(name='Weekday', x=['Avg Utilization'],
+                    y=[cu.get('weekday_util', 0)], marker_color='#34d399')
+        fig2.add_bar(name='Weekend', x=['Avg Utilization'],
+                    y=[cu.get('weekend_util', 0)], marker_color='#f87171')
+        fig2.update_layout(height=260, margin=dict(t=8,b=8,l=0,r=0),
+                          paper_bgcolor='#111120', plot_bgcolor='#111120',
+                          barmode='group', template='plotly_dark')
+        st.plotly_chart(fig2, use_container_width=True)
+
+    # 사용자별 사용률
+    if uf.get('user_gpu_pct'):
+        st.markdown('<div class="section-title">GPU Usage by User</div>', unsafe_allow_html=True)
+        user_data = sorted(uf['user_gpu_pct'].items(), key=lambda x: -x[1])[:10]
+        users = [u for u, _ in user_data]
+        pcts  = [p for _, p in user_data]
+        fig3 = px.bar(x=pcts, y=users, orientation='h',
+                     labels={'x':'GPU Time %','y':'User'},
+                     template='plotly_dark',
+                     color=pcts,
+                     color_continuous_scale='Blues')
+        fig3.update_layout(height=280, margin=dict(t=8,b=8,l=0,r=0),
+                          paper_bgcolor='#111120', plot_bgcolor='#111120',
+                          showlegend=False)
+        st.plotly_chart(fig3, use_container_width=True)
+
+    # Recommendations
+    st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Optimization Recommendations</div>', unsafe_allow_html=True)
+
+    impact_colors = {
+        'throughput': '#6366f1',
+        'fairness':   '#9333ea',
+        'efficiency': '#0d9488',
+        'power':      '#059669',
+    }
+
+    for rec in recs:
+        color = impact_colors.get(rec.impact, '#6366f1')
+        effort_color = '#34d399' if rec.effort=='Low' else '#fbbf24' if rec.effort=='Medium' else '#f87171'
+        st.markdown(f"""
+        <div class="rec-card">
+            <div class="rec-priority" style="color:{color}">#{rec.priority} · {rec.category}</div>
+            <div class="rec-title">{rec.title}</div>
+            <div class="rec-detail">{rec.detail}</div>
+            <div style="display:flex;gap:16px;margin-bottom:8px">
+                <span style="font-size:11px;color:#6b7280">
+                    Now: <b style="color:#f87171">{rec.metric_before}</b>
+                </span>
+                <span style="font-size:11px;color:#6b7280">→</span>
+                <span style="font-size:11px;color:#6b7280">
+                    Target: <b style="color:#34d399">{rec.metric_after}</b>
+                </span>
+            </div>
+            <div class="rec-meta">
+                Effort: <span style="color:{effort_color}">{rec.effort}</span> &nbsp;·&nbsp;
+                Owner: {rec.owner} &nbsp;·&nbsp;
+                {rec.timeframe}
+            </div>
+        </div>""", unsafe_allow_html=True)
+        action_html = html_lib.escape(rec.action).replace('\n', '<br>').replace('  ', '&nbsp;&nbsp;')
+        st.markdown(f'<div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;margin-top:-8px;margin-bottom:16px;font-family:monospace;font-size:12px;color:#a5b4fc;line-height:1.8;">{action_html}</div>', unsafe_allow_html=True)
+
+    # PDF
+    st.markdown('<div style="height:16px"></div>', unsafe_allow_html=True)
+    lab_name_input = st.text_input('Lab name (for report)', value='Your Lab', key='lab_name_input')
+    if st.button('Generate Lab PDF Report', use_container_width=True, key='lab_pdf_btn'):
+        with st.spinner('Generating lab report...'):
+            st.session_state.pdf_lab = generate_lab_pdf(
+                recs, analysis,
+                metrics_df=df,
+                jobs_df=jobs_df,
+                lab_name=lab_name_input
+            )
+    if st.session_state.get('pdf_lab') is not None:
+        st.download_button(
+            label='⬇ Download Lab PDF Report',
+            data=st.session_state.pdf_lab,
+            file_name='infralens_lab_report.pdf',
+            mime='application/pdf',
+            use_container_width=True,
+            key='lab_pdf_dl'
+        )
+
+    st.stop()
+
+# ══════════════════════════════════════════
+# BUSINESS 버전 (기존 코드)
+# ══════════════════════════════════════════
 
 # ── 데이터 타입 감지 ──
 profile   = profile_dataset(df)

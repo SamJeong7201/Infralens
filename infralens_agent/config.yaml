@@ -1,0 +1,22 @@
+# InfraLens Agent Configuration
+lab:
+  name: "Your Lab"
+  mode: "business"  # business / lab
+
+collection:
+  interval_minutes: 60
+  nvidia_smi: true
+  slurm: false        # true면 squeue/sacct 수집
+
+notifications:
+  slack_webhook: ""   # https://hooks.slack.com/...
+  email: ""
+  
+execution:
+  enabled: false      # 기본 OFF - 승인 후에만 켬
+  dry_run: true       # true면 명령어만 보여주고 실행 안 함
+
+storage:
+  db_path: "data/metrics.db"
+  reports_path: "data/reports/"
+  retention_days: 90
