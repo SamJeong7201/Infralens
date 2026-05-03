@@ -686,6 +686,34 @@ def generate_lab_pdf(recs, analysis, metrics_df=None,
             pdf.ln(6)
         pdf.ln(4)
 
+    # User fairness action item
+    if uf.get('monopoly_pct', 0) > 5:
+        mu   = uf.get('monopoly_user', 'unknown')
+        mpct = uf.get('monopoly_pct', 0)
+        pdf.ln(2)
+        pdf.set_fill_color(255, 251, 235)
+        pdf.set_draw_color(*AMBER)
+        pdf.set_line_width(0.4)
+        pdf.rect(16, pdf.get_y(), 178, 16, 'FD')
+        y0 = pdf.get_y()
+        pdf.set_xy(20, y0 + 2)
+        pdf.set_font('Helvetica', 'B', 8)
+        pdf.set_text_color(*AMBER)
+        pdf.cell(0, 4, 'Recommended Action: Apply Fairshare Policy')
+        pdf.set_xy(20, y0 + 7)
+        pdf.set_font('Helvetica', '', 7.5)
+        pdf.set_text_color(*DARK)
+        pdf.cell(0, 4, s(
+            f'Top user is consuming {mpct:.0f}% of GPU time. '
+            f'Apply fairshare scheduling to rebalance access: '
+            f'sacctmgr modify user <top_user> set GrpTRES=gres/gpu=4'
+        ))
+        pdf.set_xy(20, y0 + 12)
+        pdf.set_font('Helvetica', 'I', 7)
+        pdf.set_text_color(*GRAY)
+        pdf.cell(0, 3, 'See Recommendation #3 for full implementation guide.')
+        pdf.ln(18)
+
     # Queue 분석
     if qb:
         pdf.h2('Queue Analysis')

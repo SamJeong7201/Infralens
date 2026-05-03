@@ -4,7 +4,7 @@ lab:
   mode: "business"  # business / lab
 
 collection:
-  interval_minutes: 60
+  interval_minutes: 5
   nvidia_smi: true
   slurm: false        # true면 squeue/sacct 수집
 

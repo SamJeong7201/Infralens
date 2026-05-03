@@ -107,7 +107,7 @@ def generate_lab_recommendations(analysis: Dict) -> List[LabRecommendation]:
             owner='sysadmin',
             timeframe='This week',
             metric_before=f'{cu.get("overall_util",0)}% utilization',
-            metric_after='50%+ utilization (benchmark threshold for similarly sized academic clusters)',
+            metric_after='50%+ utilization (Klusacek et al. 2017, academic clusters 38-55%)',
         ))
 
     # ── 2. 대기 시간 길면 ──
@@ -142,7 +142,8 @@ def generate_lab_recommendations(analysis: Dict) -> List[LabRecommendation]:
                 '\n'
                 'WHAT TO DO  ·  Owner: System Admin  ·  Time: 1 hour\n'
                 '--------------------------------------------------\n'
-                'Set GPU time limits per job type to prevent long-running jobs from blocking the queue.\n'
+                'Set per-partition time limits so long jobs cannot block the queue.\n'
+                'This complements Recommendation #1 (backfill) and can be applied independently.\n'
                 '\n'
                 'Step 1 — Set partition time limits\n'
                 '  # Short jobs get priority:\n'
