@@ -20,6 +20,7 @@ from collect import run_collection
 from analyze import run_all
 from tracker import save_snapshot, get_changes, get_recurring, print_changes
 from env_detect import detect_all, print_env
+from notify.mailer import send_admin_alert, send_manager_report
 
 CONFIG_PATH = Path(__file__).parent / 'config.yaml'
 DB_PATH     = Path(__file__).parent / 'data/metrics.db'
@@ -159,6 +160,14 @@ def run_once(auto_execute=False):
         for r in manual_recs:
             print(f"  [{r['severity'].upper()}] {r['type']} — {r['message'][:55]}")
     print()
+
+    # 9. 이메일 알림
+    if config['notifications']['admin']['email']:
+        send_admin_alert(result)
+    if config['notifications']['manager']['email']:
+        from datetime import datetime
+        if datetime.now().weekday() == 0:  # 월요일
+            send_manager_report(result, changes)
 
     return result
 

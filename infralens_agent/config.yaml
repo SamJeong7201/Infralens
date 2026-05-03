@@ -6,17 +6,44 @@ lab:
 collection:
   interval_minutes: 5
   nvidia_smi: true
-  slurm: false        # true면 squeue/sacct 수집
+  slurm: false
 
 notifications:
-  slack_webhook: ""   # https://hooks.slack.com/...
-  email: ""
-  
+  # 서버 관리자 — 문제 발생 즉시 알림
+  admin:
+    email: ""              # admin@company.com
+    slack_webhook: ""      # https://hooks.slack.com/...
+
+  # 매니저/CFO — 주간 보고서
+  manager:
+    email: ""              # cfo@company.com
+    report_day: "monday"   # 주간 보고서 요일
+    report_hour: 9         # 몇 시에 발송
+
+  # 이메일 서버 설정
+  smtp:
+    host: "smtp.gmail.com"
+    port: 587
+    user: ""               # 발신 이메일
+    password: ""           # 앱 비밀번호
+
 execution:
-  enabled: false      # 기본 OFF - 승인 후에만 켬
-  dry_run: true       # true면 명령어만 보여주고 실행 안 함
+  enabled: false
+  dry_run: true
 
 storage:
   db_path: "data/metrics.db"
   reports_path: "data/reports/"
   retention_days: 90
+
+# 이메일 테스트용 — 실제 값으로 바꿔주세요
+# notifications:
+#   admin:
+#     email: "admin@gmail.com"
+#   manager:
+#     email: "manager@gmail.com"
+#   smtp:
+#     host: "smtp.gmail.com"
+#     port: 587
+#     user: "your@gmail.com"
+#     password: "앱비밀번호"  # Gmail 앱 비밀번호
